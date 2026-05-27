@@ -5,6 +5,7 @@ description = "Constraint-based timetable solver for TimeFlex"
 requires-python = ">=3.11"
 dependencies = [
 	"fastapi>=0.115.0",
+	"ortools>=9.10.0",
 	"uvicorn>=0.30.0",
 ]
 

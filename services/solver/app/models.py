@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class SessionRequest(BaseModel):
+    id: str
     subject_id: str
     teacher_id: str
     room_id: str
@@ -17,6 +18,7 @@ class SolverRequest(BaseModel):
 
 
 class ScheduledSession(BaseModel):
+    id: str
     subject_id: str
     teacher_id: str
     room_id: str
