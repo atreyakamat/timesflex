@@ -12,6 +12,23 @@ def solve_timetable(request: SolverRequest) -> tuple[list[ScheduledSession], lis
     num_days = len(request.days)
     num_slots = len(request.slots)
 
+    def parse_time(time_str: str) -> int:
+        h, m = time_str.split(':')
+        return int(h) * 60 + int(m)
+
+    breaks_after_slot = set()
+    for i in range(num_slots - 1):
+        end_time_current = parse_time(request.slots[i].split('-')[1])
+        start_time_next = parse_time(request.slots[i + 1].split('-')[0])
+        if end_time_current != start_time_next:
+            breaks_after_slot.add(i)
+
+    def is_valid_start(start_idx: int, duration: int) -> bool:
+        for i in range(start_idx, start_idx + duration - 1):
+            if i in breaks_after_slot:
+                return False
+        return True
+
     model = cp_model.CpModel()
     assignment: dict[tuple[int, int, int], cp_model.IntVar] = {}
 
@@ -23,10 +40,15 @@ def solve_timetable(request: SolverRequest) -> tuple[list[ScheduledSession], lis
 
         for day_index in range(num_days):
             for slot_index in range(latest_start + 1):
+                if not is_valid_start(slot_index, session.duration_slots):
+                    continue
                 var = model.NewBoolVar(f"s{session_index}_d{day_index}_t{slot_index}")
                 assignment[(session_index, day_index, slot_index)] = var
                 possible_starts.append(var)
 
+        if not possible_starts:
+            return [], request.sessions
+        
         model.Add(sum(possible_starts) == 1)
 
     # Overlap constraints (Resource constraints)

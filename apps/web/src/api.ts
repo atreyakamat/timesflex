@@ -37,6 +37,14 @@ export const createTimetable = async (
   });
 };
 
+export const listInstitutions = async (): Promise<InstitutionRecord[]> => {
+  return requestJson('/api/institutions');
+};
+
+export const listTimetables = async (institutionId: string): Promise<TimetableRecord[]> => {
+  return requestJson(`/api/institutions/${institutionId}/timetables`);
+};
+
 export const solveTimetable = async (timetableId: string): Promise<{ timetable: TimetableRecord; solver: SolverResult }> => {
   return requestJson(`/api/timetables/${timetableId}/solve`, {
     method: 'POST',

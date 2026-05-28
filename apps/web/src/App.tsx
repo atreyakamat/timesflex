@@ -7,6 +7,7 @@ import {
   updateTimetable,
 } from './api';
 import { AcademicStructure } from './components/AcademicStructure';
+import { Dashboard } from './components/Dashboard';
 import { InstitutionSetup } from './components/InstitutionSetup';
 import { RoomSetup } from './components/RoomSetup';
 import { SubjectSetup } from './components/SubjectSetup';
@@ -16,6 +17,7 @@ import type {
   DepartmentForm,
   DivisionForm,
   InstitutionForm,
+  InstitutionRecord,
   RoomForm,
   ScheduledSession,
   SessionRequest,
@@ -53,6 +55,7 @@ const steps = [
 ];
 
 export function App() {
+  const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
   const [activeStep, setActiveStep] = useState(steps[0].id);
   const [institution, setInstitution] = useState(initialInstitution);
   const [department, setDepartment] = useState(initialDepartment);
@@ -65,6 +68,38 @@ export function App() {
   const [timetableId, setTimetableId] = useState<string | null>(null);
   const [scheduledSessions, setScheduledSessions] = useState<ScheduledSession[]>([]);
   const [unscheduledSessions, setUnscheduledSessions] = useState<SessionRequest[]>([]);
+
+  const handleLoadInstitution = (record: InstitutionRecord) => {
+    const profile = (record.data as any)?.profile || record.data;
+    if (profile) {
+      setInstitution(profile.institution || initialInstitution);
+      setDepartment(profile.department || initialDepartment);
+      setDivisions(profile.divisions || []);
+      setTeachers(profile.teachers || []);
+      setRooms(profile.rooms || []);
+      setSubjects(profile.subjects || []);
+    }
+    setInstitutionId(record.id);
+    setView('editor');
+    setActiveStep('institution');
+    setStatusMessage(`Loaded ${record.name} profile.`);
+  };
+
+  const handleNewInstitution = () => {
+    setInstitution(initialInstitution);
+    setDepartment(initialDepartment);
+    setDivisions([]);
+    setTeachers([]);
+    setRooms([]);
+    setSubjects([]);
+    setInstitutionId(null);
+    setTimetableId(null);
+    setScheduledSessions([]);
+    setUnscheduledSessions([]);
+    setView('editor');
+    setActiveStep('institution');
+    setStatusMessage('Started new institution profile.');
+  };
 
   const slots = useMemo(
     () =>
@@ -251,95 +286,111 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">TF</div>
-          <div>
-            <strong>TimeFlex</strong>
-            <span>Enterprise scheduler</span>
-          </div>
-        </div>
-        <nav className="step-list">
-          {steps.map((step) => (
-            <button
-              key={step.id}
-              type="button"
-              className={activeStep === step.id ? 'step active' : 'step'}
-              onClick={() => setActiveStep(step.id)}
-            >
-              {step.label}
+      {view === 'dashboard' ? (
+        <main className="content" style={{ gridColumn: '1 / -1' }}>
+          <Dashboard
+            onLoadInstitution={handleLoadInstitution}
+            onNewInstitution={handleNewInstitution}
+          />
+        </main>
+      ) : (
+        <>
+          <aside className="sidebar">
+            <div className="brand">
+              <div className="brand-mark">TF</div>
+              <div>
+                <strong>TimeFlex</strong>
+                <span>Enterprise scheduler</span>
+              </div>
+            </div>
+
+            <button className="nav-back" onClick={() => setView('dashboard')}>
+              ← Back to Dashboard
             </button>
-          ))}
-        </nav>
-        <div className="status-card">
-          <span>Status</span>
-          <p>{statusMessage || 'Fill the setup tabs to start generating.'}</p>
-        </div>
-      </aside>
 
-      <main className="content">
-        {activeStep === 'institution' && (
-          <InstitutionSetup
-            institution={institution}
-            onUpdate={setInstitution}
-            dayOptions={dayOptions}
-          />
-        )}
+            <nav className="step-list">
+              {steps.map((step) => (
+                <button
+                  key={step.id}
+                  type="button"
+                  className={activeStep === step.id ? 'step active' : 'step'}
+                  onClick={() => setActiveStep(step.id)}
+                >
+                  {step.label}
+                </button>
+              ))}
+            </nav>
+            <div className="status-card">
+              <span>Status</span>
+              <p>{statusMessage || 'Fill the setup tabs to start generating.'}</p>
+            </div>
+          </aside>
 
-        {activeStep === 'structure' && (
-          <AcademicStructure
-            department={department}
-            onDepartmentUpdate={setDepartment}
-            divisions={divisions}
-            onAddDivision={(d) => setDivisions([...divisions, d])}
-            onRemoveDivision={(id) => setDivisions(divisions.filter((d) => d.id !== id))}
-          />
-        )}
+          <main className="content">
+            {activeStep === 'institution' && (
+              <InstitutionSetup
+                institution={institution}
+                onUpdate={setInstitution}
+                dayOptions={dayOptions}
+              />
+            )}
 
-        {activeStep === 'teachers' && (
-          <TeacherSetup
-            teachers={teachers}
-            onAddTeacher={(t) => setTeachers([...teachers, t])}
-            onRemoveTeacher={(id) => setTeachers(teachers.filter((t) => t.id !== id))}
-          />
-        )}
+            {activeStep === 'structure' && (
+              <AcademicStructure
+                department={department}
+                onDepartmentUpdate={setDepartment}
+                divisions={divisions}
+                onAddDivision={(d) => setDivisions([...divisions, d])}
+                onRemoveDivision={(id) => setDivisions(divisions.filter((d) => d.id !== id))}
+              />
+            )}
 
-        {activeStep === 'rooms' && (
-          <RoomSetup
-            rooms={rooms}
-            onAddRoom={(r) => setRooms([...rooms, r])}
-            onRemoveRoom={(id) => setRooms(rooms.filter((r) => r.id !== id))}
-          />
-        )}
+            {activeStep === 'teachers' && (
+              <TeacherSetup
+                teachers={teachers}
+                onAddTeacher={(t) => setTeachers([...teachers, t])}
+                onRemoveTeacher={(id) => setTeachers(teachers.filter((t) => t.id !== id))}
+              />
+            )}
 
-        {activeStep === 'subjects' && (
-          <SubjectSetup
-            subjects={subjects}
-            teachers={teachers}
-            rooms={rooms}
-            onAddSubject={(s) => setSubjects([...subjects, s])}
-            onRemoveSubject={(id) => setSubjects(subjects.filter((s) => s.id !== id))}
-          />
-        )}
+            {activeStep === 'rooms' && (
+              <RoomSetup
+                rooms={rooms}
+                onAddRoom={(r) => setRooms([...rooms, r])}
+                onRemoveRoom={(id) => setRooms(rooms.filter((r) => r.id !== id))}
+              />
+            )}
 
-        {activeStep === 'generate' && (
-          <TimetablePreview
-            institution={institution}
-            divisions={divisions}
-            teachers={teachers}
-            rooms={rooms}
-            subjects={subjects}
-            slots={slots}
-            scheduledSessions={scheduledSessions}
-            unscheduledSessions={unscheduledSessions}
-            timetableGrid={timetableGrid}
-            conflicts={conflicts}
-            onGenerate={handleGenerate}
-            onSaveEdits={handleSaveEdits}
-            onSessionUpdate={handleSessionUpdate}
-          />
-        )}
-      </main>
+            {activeStep === 'subjects' && (
+              <SubjectSetup
+                subjects={subjects}
+                teachers={teachers}
+                rooms={rooms}
+                onAddSubject={(s) => setSubjects([...subjects, s])}
+                onRemoveSubject={(id) => setSubjects(subjects.filter((s) => s.id !== id))}
+              />
+            )}
+
+            {activeStep === 'generate' && (
+              <TimetablePreview
+                institution={institution}
+                divisions={divisions}
+                teachers={teachers}
+                rooms={rooms}
+                subjects={subjects}
+                slots={slots}
+                scheduledSessions={scheduledSessions}
+                unscheduledSessions={unscheduledSessions}
+                timetableGrid={timetableGrid}
+                conflicts={conflicts}
+                onGenerate={handleGenerate}
+                onSaveEdits={handleSaveEdits}
+                onSessionUpdate={handleSessionUpdate}
+              />
+            )}
+          </main>
+        </>
+      )}
     </div>
   );
 }

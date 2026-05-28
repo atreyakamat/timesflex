@@ -355,3 +355,102 @@ select {
   border: 1px solid rgba(239, 68, 68, 0.3);
   margin-top: 20px;
 }
+
+/* Dashboard Styles */
+.dashboard-view {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 32px;
+}
+
+.dashboard-header h1 {
+  margin: 0 0 8px;
+  font-size: 2.2rem;
+}
+
+.dashboard-header p {
+  margin: 0;
+  color: #475569;
+}
+
+.institution-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 24px;
+}
+
+.card.clickable {
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card.clickable:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 32px 64px rgba(15, 23, 42, 0.12);
+}
+
+.card-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: rgba(14, 165, 233, 0.1);
+  color: #0369a1;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+}
+
+.card p {
+  font-size: 0.9rem;
+  color: #64748b;
+  margin: 0 0 20px;
+}
+
+.card-footer {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #0ea5e9;
+}
+
+.empty-card {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 60px;
+  color: #64748b;
+}
+
+.loading-state {
+  text-align: center;
+  padding: 40px;
+  color: #64748b;
+}
+
+.nav-back {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+}
+
+.nav-back:hover {
+  color: #0f172a;
+}
