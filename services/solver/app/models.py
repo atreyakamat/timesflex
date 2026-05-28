@@ -11,10 +11,17 @@ class SessionRequest(BaseModel):
     duration_slots: int = Field(default=1, ge=1)
 
 
+class TeacherConstraint(BaseModel):
+    teacher_id: str
+    max_lectures_per_day: int
+    max_lectures_per_week: int
+
+
 class SolverRequest(BaseModel):
     days: list[str]
     slots: list[str]
     sessions: list[SessionRequest]
+    teacher_constraints: list[TeacherConstraint] = Field(default_factory=list)
 
 
 class ScheduledSession(BaseModel):

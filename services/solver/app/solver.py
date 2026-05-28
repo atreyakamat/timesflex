@@ -29,6 +29,7 @@ def solve_timetable(request: SolverRequest) -> tuple[list[ScheduledSession], lis
 
         model.Add(sum(possible_starts) == 1)
 
+    # Overlap constraints (Resource constraints)
     def add_resource_constraints(resource_key):
         resource_ids = sorted({resource_key(session) for session in request.sessions})
         for resource_id in resource_ids:
@@ -51,6 +52,46 @@ def solve_timetable(request: SolverRequest) -> tuple[list[ScheduledSession], lis
     add_resource_constraints(lambda session: session.room_id)
     add_resource_constraints(lambda session: session.division_id)
 
+    # Teacher Workload Constraints
+    teacher_constraints_map = {c.teacher_id: c for c in request.teacher_constraints}
+    teachers_in_sessions = sorted({s.teacher_id for s in request.sessions})
+
+    for teacher_id in teachers_in_sessions:
+        constraint = teacher_constraints_map.get(teacher_id)
+        if not constraint:
+            continue
+
+        # Max per week
+        teacher_sessions_vars = []
+        for session_index, session in enumerate(request.sessions):
+            if session.teacher_id == teacher_id:
+                for day_index in range(num_days):
+                    latest_start = num_slots - session.duration_slots
+                    for start in range(latest_start + 1):
+                        var = assignment.get((session_index, day_index, start))
+                        if var is not None:
+                            # Each session counts for its duration_slots lectures? 
+                            # PRD says "Daily and weekly lecture limits"
+                            # Usually, sessions are lectures. If a session is 2 slots, it's 2 lectures.
+                            teacher_sessions_vars.append(var * session.duration_slots)
+        
+        if teacher_sessions_vars:
+            model.Add(sum(teacher_sessions_vars) <= constraint.max_lectures_per_week)
+
+        # Max per day
+        for day_index in range(num_days):
+            daily_vars = []
+            for session_index, session in enumerate(request.sessions):
+                if session.teacher_id == teacher_id:
+                    latest_start = num_slots - session.duration_slots
+                    for start in range(latest_start + 1):
+                        var = assignment.get((session_index, day_index, start))
+                        if var is not None:
+                            daily_vars.append(var * session.duration_slots)
+            if daily_vars:
+                model.Add(sum(daily_vars) <= constraint.max_lectures_per_day)
+
+    # Objective: Spread workload (Minimize late slots)
     objective_terms = []
     for (session_index, day_index, slot_index), var in assignment.items():
         weight = slot_index + (day_index * num_slots)
