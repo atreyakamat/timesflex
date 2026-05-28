@@ -454,3 +454,39 @@ select {
 .nav-back:hover {
   color: #0f172a;
 }
+
+/* Chat Setup Styles */
+.chat-setup textarea {
+  width: 100%;
+  margin: 16px 0;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.chat-container {
+  display: grid;
+  gap: 12px;
+}
+
+.draft-preview {
+  margin-top: 24px;
+  padding: 20px;
+  background: #f8fafc;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+}
+
+.draft-summary {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.draft-summary p {
+  margin: 0;
+  font-size: 0.95rem;
+}

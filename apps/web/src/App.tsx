@@ -7,6 +7,7 @@ import {
   updateTimetable,
 } from './api';
 import { AcademicStructure } from './components/AcademicStructure';
+import { ChatSetup } from './components/ChatSetup';
 import { Dashboard } from './components/Dashboard';
 import { InstitutionSetup } from './components/InstitutionSetup';
 import { RoomSetup } from './components/RoomSetup';
@@ -46,6 +47,7 @@ const initialDepartment: DepartmentForm = {
 };
 
 const steps = [
+  { id: 'chat', label: 'Chat Setup' },
   { id: 'institution', label: 'Institution' },
   { id: 'structure', label: 'Structure' },
   { id: 'teachers', label: 'Teachers' },
@@ -99,6 +101,20 @@ export function App() {
     setView('editor');
     setActiveStep('institution');
     setStatusMessage('Started new institution profile.');
+  };
+
+  const handleChatApply = (draft: {
+    teachers: TeacherForm[];
+    subjects: SubjectForm[];
+    rooms: RoomForm[];
+    divisions: DivisionForm[];
+  }) => {
+    setTeachers((current) => [...current, ...draft.teachers]);
+    setSubjects((current) => [...current, ...draft.subjects]);
+    setRooms((current) => [...current, ...draft.rooms]);
+    setDivisions((current) => [...current, ...draft.divisions]);
+    setActiveStep('institution');
+    setStatusMessage('Applied chat-based draft to profile.');
   };
 
   const slots = useMemo(
@@ -327,8 +343,9 @@ export function App() {
           </aside>
 
           <main className="content">
-            {activeStep === 'institution' && (
-              <InstitutionSetup
+            {activeStep === 'chat' && <ChatSetup onApply={handleChatApply} />}
+
+            {activeStep === 'institution' && (              <InstitutionSetup
                 institution={institution}
                 onUpdate={setInstitution}
                 dayOptions={dayOptions}

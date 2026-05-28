@@ -1,16 +1,16 @@
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import pg from 'pg';
 import { nanoid } from 'nanoid';
+
+const { Pool } = pg;
 
 const schema = `
 CREATE TABLE IF NOT EXISTS institutions (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   type TEXT NOT NULL,
-  data TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS timetables (
@@ -18,63 +18,65 @@ CREATE TABLE IF NOT EXISTS timetables (
   institution_id TEXT NOT NULL,
   label TEXT,
   status TEXT NOT NULL,
-  request TEXT NOT NULL,
-  generated_sessions TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (institution_id) REFERENCES institutions (id)
+  request JSONB NOT NULL,
+  generated_sessions JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_institution FOREIGN KEY (institution_id) REFERENCES institutions (id)
 );
 `;
 
-const nowIso = () => new Date().toISOString();
+export const initDb = async (connectionString) => {
+  const pool = new Pool({
+    connectionString,
+  });
 
-const parseJson = (value, fallback = null) => {
-  if (!value) {
-    return fallback;
-  }
+  // Verify connection and run schema
+  const client = await pool.connect();
   try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
+    await client.query(schema);
+  } finally {
+    client.release();
   }
+
+  return pool;
 };
 
-export const initDb = (dbPath) => {
-  const resolvedPath = resolve(dbPath);
-  mkdirSync(dirname(resolvedPath), { recursive: true });
-  const db = new Database(resolvedPath);
-  db.pragma('journal_mode = WAL');
-  db.exec(schema);
-  return db;
-};
-
-export const createInstitution = (db, payload) => {
+export const createInstitution = async (pool, payload) => {
   const id = nanoid();
-  const timestamp = nowIso();
-  const data = JSON.stringify(payload.data ?? {});
-  db.prepare(
-    `INSERT INTO institutions (id, name, type, data, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, payload.name, payload.type, data, timestamp, timestamp);
-  return { id, name: payload.name, type: payload.type, data: payload.data ?? {}, createdAt: timestamp };
+  const data = payload.data ?? {};
+  const result = await pool.query(
+    `INSERT INTO institutions (id, name, type, data)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [id, payload.name, payload.type, JSON.stringify(data)]
+  );
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    data: row.data,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 };
 
-export const listInstitutions = (db) => {
-  return db
-    .prepare('SELECT * FROM institutions ORDER BY created_at DESC')
-    .all()
-    .map((row) => ({
-      id: row.id,
-      name: row.name,
-      type: row.type,
-      data: parseJson(row.data, {}),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+export const listInstitutions = async (pool) => {
+  const result = await pool.query('SELECT * FROM institutions ORDER BY created_at DESC');
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    data: row.data,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
 };
 
-export const getInstitution = (db, id) => {
-  const row = db.prepare('SELECT * FROM institutions WHERE id = ?').get(id);
+export const getInstitution = async (pool, id) => {
+  const result = await pool.query('SELECT * FROM institutions WHERE id = $1', [id]);
+  const row = result.rows[0];
   if (!row) {
     return null;
   }
@@ -82,49 +84,49 @@ export const getInstitution = (db, id) => {
     id: row.id,
     name: row.name,
     type: row.type,
-    data: parseJson(row.data, {}),
+    data: row.data,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 };
 
-export const createTimetable = (db, payload) => {
+export const createTimetable = async (pool, payload) => {
   const id = nanoid();
-  const timestamp = nowIso();
-  db.prepare(
-    `INSERT INTO timetables (id, institution_id, label, status, request, generated_sessions, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    payload.institutionId,
-    payload.label ?? null,
-    payload.status ?? 'draft',
-    JSON.stringify(payload.request ?? {}),
-    JSON.stringify(payload.generatedSessions ?? []),
-    timestamp,
-    timestamp,
+  await pool.query(
+    `INSERT INTO timetables (id, institution_id, label, status, request, generated_sessions)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      id,
+      payload.institutionId,
+      payload.label ?? null,
+      payload.status ?? 'draft',
+      JSON.stringify(payload.request ?? {}),
+      JSON.stringify(payload.generatedSessions ?? []),
+    ]
   );
-  return getTimetable(db, id);
+  return getTimetable(pool, id);
 };
 
-export const listTimetables = (db, institutionId) => {
-  return db
-    .prepare('SELECT * FROM timetables WHERE institution_id = ? ORDER BY created_at DESC')
-    .all(institutionId)
-    .map((row) => ({
-      id: row.id,
-      institutionId: row.institution_id,
-      label: row.label,
-      status: row.status,
-      request: parseJson(row.request, {}),
-      generatedSessions: parseJson(row.generated_sessions, []),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+export const listTimetables = async (pool, institutionId) => {
+  const result = await pool.query(
+    'SELECT * FROM timetables WHERE institution_id = $1 ORDER BY created_at DESC',
+    [institutionId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    institutionId: row.institution_id,
+    label: row.label,
+    status: row.status,
+    request: row.request,
+    generatedSessions: row.generated_sessions,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
 };
 
-export const getTimetable = (db, id) => {
-  const row = db.prepare('SELECT * FROM timetables WHERE id = ?').get(id);
+export const getTimetable = async (pool, id) => {
+  const result = await pool.query('SELECT * FROM timetables WHERE id = $1', [id]);
+  const row = result.rows[0];
   if (!row) {
     return null;
   }
@@ -133,19 +135,19 @@ export const getTimetable = (db, id) => {
     institutionId: row.institution_id,
     label: row.label,
     status: row.status,
-    request: parseJson(row.request, {}),
-    generatedSessions: parseJson(row.generated_sessions, []),
+    request: row.request,
+    generatedSessions: row.generated_sessions,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 };
 
-export const updateTimetableSessions = (db, id, generatedSessions, status = 'generated') => {
-  const timestamp = nowIso();
-  db.prepare(
+export const updateTimetableSessions = async (pool, id, generatedSessions, status = 'generated') => {
+  await pool.query(
     `UPDATE timetables
-     SET generated_sessions = ?, status = ?, updated_at = ?
-     WHERE id = ?`
-  ).run(JSON.stringify(generatedSessions ?? []), status, timestamp, id);
-  return getTimetable(db, id);
+     SET generated_sessions = $1, status = $2, updated_at = NOW()
+     WHERE id = $3`,
+    [JSON.stringify(generatedSessions ?? []), status, id]
+  );
+  return getTimetable(pool, id);
 };
