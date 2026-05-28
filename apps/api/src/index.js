@@ -5,6 +5,7 @@ import express from 'express';
 import {
   createInstitution,
   createTimetable,
+  deleteInstitution,
   getInstitution,
   getTimetable,
   initDb,
@@ -61,6 +62,19 @@ app.get('/api/institutions/:id', async (request, response) => {
       return;
     }
     response.json(institution);
+  } catch (error) {
+    response.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/institutions/:id', async (request, response) => {
+  try {
+    const success = await deleteInstitution(db, request.params.id);
+    if (!success) {
+      response.status(404).json({ error: 'Institution not found' });
+      return;
+    }
+    response.json({ success: true });
   } catch (error) {
     response.status(500).json({ error: error.message });
   }
@@ -134,33 +148,47 @@ app.post('/api/parse', (request, response) => {
     divisions: [],
   };
 
-  // Extract Teachers
-  const teacherMatches = text.matchAll(/(?:add\s+)?teacher\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/gi);
-  for (const match of teacherMatches) {
-    draft.teachers.push({ name: match[1], maxLecturesPerDay: 4, maxLecturesPerWeek: 20 });
-  }
-
-  // Extract Subjects
-  const subjectMatches = text.matchAll(/(?:add\s+)?subject\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/gi);
-  for (const match of subjectMatches) {
-    draft.subjects.push({
-      name: match[1],
-      isLab: match[0].toLowerCase().includes('lab'),
-      durationSlots: 1,
-      sessionsPerWeek: 3,
+  // Improved Teacher Extraction (handles "Add teachers Alice, Bob, and Charlie")
+  const teacherBlock = text.match(/(?:teachers?)\s+([^.]+)/i);
+  if (teacherBlock) {
+    const names = teacherBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
+    names.forEach(name => {
+      draft.teachers.push({ name, maxLecturesPerDay: 4, maxLecturesPerWeek: 20 });
     });
   }
 
-  // Extract Rooms
-  const roomMatches = text.matchAll(/(?:add\s+)?room\s+(\w+(?:\s+\w+)*)/gi);
-  for (const match of roomMatches) {
-    draft.rooms.push({ name: match[1], type: 'classroom', capacity: 40 });
+  // Improved Subject Extraction (handles "Mathematics (2 slots), Physics")
+  const subjectBlock = text.match(/(?:subjects?)\s+([^.]+)/i);
+  if (subjectBlock) {
+    const parts = subjectBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
+    parts.forEach(part => {
+      const durationMatch = part.match(/(\d+)\s*slots?/i);
+      const name = part.replace(/\(.*\)/, '').trim();
+      draft.subjects.push({
+        name,
+        isLab: name.toLowerCase().includes('lab'),
+        durationSlots: durationMatch ? parseInt(durationMatch[1]) : 1,
+        sessionsPerWeek: 3,
+      });
+    });
   }
 
-  // Extract Divisions
-  const divisionMatches = text.matchAll(/(?:add\s+)?division\s+(\w+)/gi);
-  for (const match of divisionMatches) {
-    draft.divisions.push({ name: match[1], batches: [] });
+  // Improved Room Extraction
+  const roomBlock = text.match(/(?:rooms?)\s+([^.]+)/i);
+  if (roomBlock) {
+    const names = roomBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
+    names.forEach(name => {
+      draft.rooms.push({ name, type: 'classroom', capacity: 40 });
+    });
+  }
+
+  // Improved Division Extraction
+  const divisionBlock = text.match(/(?:divisions?)\s+([^.]+)/i);
+  if (divisionBlock) {
+    const names = divisionBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
+    names.forEach(name => {
+      draft.divisions.push({ name, batches: [] });
+    });
   }
 
   response.json(draft);

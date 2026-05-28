@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listInstitutions } from '../api';
+import { deleteInstitution, listInstitutions } from '../api';
 import type { InstitutionRecord } from '../types';
 
 interface DashboardProps {
@@ -11,11 +11,28 @@ export function Dashboard({ onLoadInstitution, onNewInstitution }: DashboardProp
   const [institutions, setInstitutions] = useState<InstitutionRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchInstitutions = () => {
+    setLoading(true);
     listInstitutions()
       .then(setInstitutions)
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchInstitutions();
   }, []);
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (confirm('Are you sure you want to delete this institution and all its timetables?')) {
+      try {
+        await deleteInstitution(id);
+        fetchInstitutions();
+      } catch (err) {
+        alert('Failed to delete institution');
+      }
+    }
+  };
 
   return (
     <div className="dashboard-view">
@@ -36,6 +53,13 @@ export function Dashboard({ onLoadInstitution, onNewInstitution }: DashboardProp
           {institutions.map((inst) => (
             <div key={inst.id} className="card clickable" onClick={() => onLoadInstitution(inst)}>
               <div className="card-badge">{inst.type}</div>
+              <button 
+                className="delete-icon" 
+                onClick={(e) => handleDelete(e, inst.id)}
+                title="Delete Institution"
+              >
+                ×
+              </button>
               <h3>{inst.name}</h3>
               <p>Managed profile with subjects, teachers and rooms.</p>
               <div className="card-footer">

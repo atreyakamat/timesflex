@@ -116,7 +116,14 @@ def solve_timetable(request: SolverRequest) -> tuple[list[ScheduledSession], lis
     # Objective: Spread workload (Minimize late slots)
     objective_terms = []
     for (session_index, day_index, slot_index), var in assignment.items():
+        # Base weight: prefer earlier slots and earlier days
         weight = slot_index + (day_index * num_slots)
+        
+        # Soft constraint: prefer morning slots (first 4 slots) for labs
+        session = request.sessions[session_index]
+        if session.kind == 'lab' and slot_index >= 4:
+            weight += 10 # Penalty for late lab slots
+            
         objective_terms.append(weight * var)
 
     model.Minimize(sum(objective_terms))

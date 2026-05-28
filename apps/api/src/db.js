@@ -90,6 +90,14 @@ export const getInstitution = async (pool, id) => {
   };
 };
 
+export const deleteInstitution = async (pool, id) => {
+  // First delete associated timetables
+  await pool.query('DELETE FROM timetables WHERE institution_id = $1', [id]);
+  // Then delete the institution
+  const result = await pool.query('DELETE FROM institutions WHERE id = $1', [id]);
+  return result.rowCount > 0;
+};
+
 export const createTimetable = async (pool, payload) => {
   const id = nanoid();
   await pool.query(

@@ -127,8 +127,18 @@ export function TimetablePreview({
                   const teacher = teachers.find((item) => item.id === session.teacher_id);
                   const room = rooms.find((item) => item.id === session.room_id);
                   const division = divisions.find((item) => item.id === session.division_id);
+                  
+                  const hasConflict = conflicts.some(c => 
+                    c.includes(day) && 
+                    c.includes(slot) && 
+                    (c.includes('Teacher') ? conflicts.filter(t => t.includes(day) && t.includes(slot) && t.includes('Teacher')).length > 0 : false ||
+                     c.includes('Room') ? conflicts.filter(r => r.includes(day) && r.includes(slot) && r.includes('Room')).length > 0 : false ||
+                     c.includes('Division') ? conflicts.filter(d => d.includes(day) && d.includes(slot) && d.includes('Division')).length > 0 : false)
+                  );
+
                   return (
-                    <div key={session.id} className="session-card">
+                    <div key={session.id} className={`session-card ${hasConflict ? 'conflict' : ''}`}>
+                      {hasConflict && <div className="conflict-badge">!</div>}
                       <strong>{subject?.name ?? 'Subject'}</strong>
                       <span>
                         {division?.name ?? 'Division'} · {room?.name ?? 'Room'}

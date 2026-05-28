@@ -27,6 +27,12 @@ export const createInstitution = async (payload: {
   });
 };
 
+export const deleteInstitution = async (id: string): Promise<{ success: boolean }> => {
+  return requestJson(`/api/institutions/${id}`, {
+    method: 'DELETE',
+  });
+};
+
 export const createTimetable = async (
   institutionId: string,
   payload: { label: string; request: SolverRequest },
