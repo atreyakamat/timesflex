@@ -86,8 +86,8 @@ export function SubjectSetup({
       id: createId(),
       name: name.trim(),
       isLab,
-      durationSlots: duration,
-      sessionsPerWeek,
+      durationSlots: Math.max(1, Math.round(duration) || 1),
+      sessionsPerWeek: Math.max(1, Math.round(sessionsPerWeek) || 1),
       teacherId,
       roomId,
       divisionIds: [],
@@ -100,6 +100,8 @@ export function SubjectSetup({
   const toggleDivision = (subject: SubjectForm, divisionId: string) => {
     const current = subject.divisionIds?.length ? subject.divisionIds : divisions.map((item) => item.id);
     const next = current.includes(divisionId) ? current.filter((id) => id !== divisionId) : [...current, divisionId];
+    // An empty list means "all divisions", so the last selected division cannot be removed.
+    if (next.length === 0) return;
     // Selecting every division is the same as "all", which also covers divisions added later.
     onUpdateSubject({ ...subject, divisionIds: next.length === divisions.length ? [] : next });
   };
@@ -152,7 +154,18 @@ export function SubjectSetup({
             <div key={subject.id} className={`list-item stacked ${missingTeacher ? 'needs-attention' : ''}`}>
               <div className="list-row">
                 <div className="list-content">
-                  <strong>{subject.name}</strong>
+                  <input
+                    key={subject.name}
+                    className="name-input"
+                    type="text"
+                    aria-label="Subject name"
+                    defaultValue={subject.name}
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value && value !== subject.name) onUpdateSubject({ ...subject, name: value });
+                      else e.target.value = subject.name;
+                    }}
+                  />
                   <span>
                     {subject.isLab ? 'Lab' : 'Lecture'} · {subject.sessionsPerWeek}/week × {subject.durationSlots} slot(s)
                     {subject.isLab ? ' · per batch' : ''}
@@ -198,7 +211,7 @@ export function SubjectSetup({
                     />
                     Heavy
                   </label>
-                  <button type="button" className="text-danger" onClick={() => onRemoveSubject(subject.id)}>
+                  <button type="button" className="text-danger" onClick={() => window.confirm(`Delete ${subject.name}?`) && onRemoveSubject(subject.id)}>
                     Delete
                   </button>
                 </div>
@@ -221,7 +234,11 @@ export function SubjectSetup({
                     <button
                       type="button"
                       className="link-button"
-                      onClick={() => setExpanded(expanded === subject.id ? null : subject.id)}
+                      onClick={() => {
+                        // "Same teacher for all" clears the per-class overrides instead of only hiding them.
+                        if (expanded === subject.id) onUpdateSubject({ ...subject, teacherOverrides: {} });
+                        setExpanded(expanded === subject.id ? null : subject.id);
+                      }}
                     >
                       {expanded === subject.id ? 'Same teacher for all' : 'Different teacher per class…'}
                     </button>

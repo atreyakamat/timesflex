@@ -34,8 +34,8 @@ export function TeacherSetup({
     onAddTeacher({
       id: createId(),
       name: name.trim(),
-      maxLecturesPerDay: maxPerDay,
-      maxLecturesPerWeek: maxPerWeek,
+      maxLecturesPerDay: Math.max(1, Math.round(maxPerDay) || 1),
+      maxLecturesPerWeek: Math.max(1, Math.round(maxPerWeek) || 1),
       unavailableDays: [],
       canTeachLabs: true,
     });
@@ -91,7 +91,18 @@ export function TeacherSetup({
             <div key={teacher.id} className={`list-item stacked ${slotsPerWeek > capacity ? 'needs-attention' : ''}`}>
               <div className="list-row">
                 <div className="list-content">
-                  <strong>{teacher.name}</strong>
+                  <input
+                    key={teacher.name}
+                    className="name-input"
+                    type="text"
+                    aria-label="Teacher name"
+                    defaultValue={teacher.name}
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value && value !== teacher.name) onUpdateTeacher({ ...teacher, name: value });
+                      else e.target.value = teacher.name;
+                    }}
+                  />
                   <span>{lines.length ? lines.join(' · ') : 'No subjects assigned yet'}</span>
                   <span className={slotsPerWeek > capacity ? 'text-warning' : ''}>
                     {slotsPerWeek} of {capacity} slots/week used
@@ -129,7 +140,7 @@ export function TeacherSetup({
                   <button type="button" className="secondary small" onClick={() => setOpen(open === teacher.id ? null : teacher.id)}>
                     {open === teacher.id ? 'Hide availability' : 'Availability'}
                   </button>
-                  <button type="button" className="text-danger" onClick={() => onRemoveTeacher(teacher.id)}>
+                  <button type="button" className="text-danger" onClick={() => window.confirm(`Delete ${teacher.name}?`) && onRemoveTeacher(teacher.id)}>
                     Delete
                   </button>
                 </div>

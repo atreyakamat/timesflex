@@ -36,6 +36,21 @@ def _parse_time(value: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+def _valid_slot(label: str) -> bool:
+    try:
+        start, end = label.split("-")
+        return _parse_time(start) < _parse_time(end)
+    except ValueError:
+        return False
+
+
+def teacher_load(request: SolverRequest, session: SessionRequest) -> int:
+    """How much of a teacher's daily/weekly limit one session uses."""
+    if request.lab_counts_as_one and session.kind == "lab":
+        return 1
+    return session.duration_slots
+
+
 def _breaks_after(slots: list[str]) -> set[int]:
     """Indices i where slot i and slot i+1 are not back to back (a break sits between them)."""
     breaks: set[int] = set()
@@ -104,6 +119,16 @@ def preflight(request: SolverRequest) -> list[str]:
     if num_days == 0 or num_slots == 0:
         return ["No working days or time slots are defined."]
 
+    bad_slots = [slot for slot in request.slots if not _valid_slot(slot)]
+    if bad_slots:
+        issues.append(
+            f"Time slots must look like 09:00-10:00 (got {', '.join(bad_slots[:3])}), "
+            "so breaks cannot be detected and labs may run across them."
+        )
+    starts = [_parse_time(slot.split("-")[0]) for slot in request.slots if _valid_slot(slot)]
+    if not bad_slots and starts != sorted(starts):
+        issues.append("Time slots are not in time order, so breaks may be detected wrongly.")
+
     longest = _longest_block(num_slots, _breaks_after(request.slots))
     too_long = {(s.subject_id, s.duration_slots) for s in request.sessions if s.duration_slots > longest}
     for subject_id, duration in sorted(too_long):
@@ -121,12 +146,26 @@ def preflight(request: SolverRequest) -> list[str]:
                 homeless.append(message)
     issues.extend(homeless)
 
-    teacher_load: dict[str, int] = defaultdict(int)
+    # A fixed room bypasses the automatic type and capacity match, so check it here.
+    rooms_by_id = {room.id: room for room in request.rooms}
+    misfits = []
     for session in request.sessions:
-        teacher_load[session.teacher_id] += session.duration_slots
+        room = rooms_by_id.get(session.room_id) if session.room_id else None
+        if room and not room_fits(session, room):
+            reason = (
+                f"seats only {room.capacity}" if (room.type == "lab") == (session.kind == "lab") else f"is a {room.type}"
+            )
+            message = f"{_group_label(request, session)} is fixed to room {name(room.id)}, which {reason}."
+            if message not in misfits:
+                misfits.append(message)
+    issues.extend(misfits)
+
+    load_by_teacher: dict[str, int] = defaultdict(int)
+    for session in request.sessions:
+        load_by_teacher[session.teacher_id] += teacher_load(request, session)
 
     for constraint in request.teacher_constraints:
-        load = teacher_load.get(constraint.teacher_id, 0)
+        load = load_by_teacher.get(constraint.teacher_id, 0)
         blocked_days = {u.day for u in constraint.unavailable if u.slot is None}
         open_days = len([d for d in request.days if d not in blocked_days])
         capacity = min(constraint.max_lectures_per_week, constraint.max_lectures_per_day * open_days)
@@ -270,7 +309,7 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
                 occupancy[("room", r, d, covered)].append(var)
                 for group in groups:
                     occupancy[("group", session.division_id, group, d, covered)].append(var)
-            teacher_day_load[(session.teacher_id, d)].append(var * session.duration_slots)
+            teacher_day_load[(session.teacher_id, d)].append(var * teacher_load(request, session))
             for group in groups:
                 group_day_load[(session.division_id, group, d)].append(var * session.duration_slots)
                 subject_day_count[(session.division_id, group, session.subject_id, d)].append(var)

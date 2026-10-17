@@ -38,7 +38,7 @@ export function AcademicStructure({
       id: createId(),
       name: name.trim(),
       batches: splitList(batches),
-      size,
+      size: Math.max(0, Math.round(size) || 0),
       yearLabel: yearLabel.trim() || defaultYear,
     });
     setName('');
@@ -112,7 +112,18 @@ export function AcademicStructure({
               .map((division) => (
                 <div key={division.id} className="list-item">
                   <div className="list-content">
-                    <strong>{division.name}</strong>
+                    <input
+                      key={division.name}
+                      className="name-input"
+                      type="text"
+                      aria-label="Division name"
+                      defaultValue={division.name}
+                      onBlur={(e) => {
+                        const value = e.target.value.trim();
+                        if (value && value !== division.name) onUpdateDivision({ ...division, name: value });
+                        else e.target.value = division.name;
+                      }}
+                    />
                     <span>
                       {division.batches.length
                         ? `${division.batches.length} batches${division.size ? ` of about ${Math.ceil(division.size / division.batches.length)}` : ''}`
@@ -136,13 +147,25 @@ export function AcademicStructure({
                         onChange={(e) => onUpdateDivision({ ...division, size: Math.max(0, Number(e.target.value)) })}
                       />
                     </label>
+                    {/* Saved on blur: the list is grouped by this label, so updating on every
+                        keystroke would move the row and drop focus. */}
                     <input
+                      key={division.yearLabel ?? defaultYear}
                       type="text"
                       title="Year / semester"
-                      value={division.yearLabel ?? defaultYear}
-                      onChange={(e) => onUpdateDivision({ ...division, yearLabel: e.target.value })}
+                      aria-label={`Year / semester for ${division.name}`}
+                      defaultValue={division.yearLabel ?? defaultYear}
+                      onBlur={(e) => {
+                        if (e.target.value !== (division.yearLabel ?? defaultYear)) {
+                          onUpdateDivision({ ...division, yearLabel: e.target.value });
+                        }
+                      }}
                     />
-                    <button type="button" className="text-danger" onClick={() => onRemoveDivision(division.id)}>
+                    <button
+                      type="button"
+                      className="text-danger"
+                      onClick={() => window.confirm(`Delete ${division.name}? Its sessions drop out of the next timetable.`) && onRemoveDivision(division.id)}
+                    >
                       Delete
                     </button>
                   </div>

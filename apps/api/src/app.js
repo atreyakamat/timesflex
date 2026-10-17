@@ -264,9 +264,15 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
   //   { status: 'edited' }             unapprove an approved version
   // Approved versions are read-only until they are unapproved.
   app.put('/api/timetables/:id', admin, route(async (request, response) => {
-    const { generatedSessions, status } = request.body ?? {};
+    const { generatedSessions, status, report } = request.body ?? {};
     if (generatedSessions !== undefined && !Array.isArray(generatedSessions)) {
       throw new HttpError(400, 'generatedSessions must be an array');
+    }
+    if (
+      report !== undefined &&
+      (typeof report !== 'object' || !Array.isArray(report?.unscheduledSessions) || !Array.isArray(report?.diagnostics))
+    ) {
+      throw new HttpError(400, 'report must have unscheduledSessions and diagnostics arrays');
     }
     if (status !== undefined && !STATUSES.includes(status)) {
       throw new HttpError(400, `status must be one of ${STATUSES.join(', ')}`);
@@ -277,7 +283,7 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     const existing = await store.getTimetable(request.params.id);
     if (!existing) throw notFound('Timetable');
 
-    if (existing.status === 'approved' && generatedSessions !== undefined && status !== 'approved') {
+    if (existing.status === 'approved' && (generatedSessions !== undefined || report !== undefined) && status !== 'approved') {
       throw new HttpError(409, 'This version is approved. Unapprove it before editing.');
     }
     const sessions = generatedSessions ?? existing.generatedSessions ?? [];
@@ -288,7 +294,7 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
       if (sessions.length === 0) throw new HttpError(409, 'An empty timetable cannot be approved.');
     }
     response.json(
-      await store.updateTimetable(existing.id, { generatedSessions: sessions, status: status ?? 'edited' }),
+      await store.updateTimetable(existing.id, { generatedSessions: sessions, status: status ?? 'edited', report }),
     );
   }));
 

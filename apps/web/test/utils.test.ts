@@ -15,7 +15,7 @@ import {
 } from '../src/utils';
 
 const days = ['Monday', 'Tuesday', 'Wednesday'];
-const slots = buildSlots('09:00', '13:00', 60, 2, 30); // 09-10, 10-11, break, 11:30-12:30
+const slots = buildSlots('09:00', '13:00', 60, [{ afterSlot: 2, minutes: 30, label: 'Break' }]); // 09-10, 10-11, break, 11:30-12:30
 
 const divisions: DivisionForm[] = [
   { id: 'A', name: 'SE-A', batches: ['A1', 'A2'], size: 60 },
@@ -137,6 +137,39 @@ test('conflicts: teacher and room unavailability, capacity, breaks', () => {
     'Room Room 101 seats 50 but DBMS has 60 students',
     'DBMS Lab on Tuesday is split by a break',
   ]);
+});
+
+test('conflicts: lab room type and teachers who do not take labs', () => {
+  const messages = findConflicts(
+    [
+      session('lab-in-class', { subject_id: 'lab', kind: 'lab', room_id: 'r1', teacher_id: 't2', day: 'Monday', slot: '11:30-12:30' }),
+      session('lecture-in-lab', { room_id: 'lab1', day: 'Tuesday', slot: '11:30-12:30', size: 0 }),
+    ],
+    { days, slots, teachers, rooms, names },
+  ).map((c) => c.message);
+  assert.deepEqual(messages, [
+    'DBMS Lab is a lab but Room Room 101 is not a lab',
+    'Dr. Rao does not take labs (DBMS Lab)',
+    'DBMS is in lab Lab 1, which is kept for lab sessions',
+  ]);
+});
+
+test('teacher limits can count a multi-slot lab as one lecture', () => {
+  const tight = [{ ...teachers[0], unavailableDays: [], unavailableSlots: [], maxLecturesPerDay: 1 }];
+  const lab = session('l', { subject_id: 'lab', kind: 'lab', room_id: 'lab1', duration_slots: 2, slot: '11:30-12:30' });
+  const count = (labCountsAsOne: boolean) =>
+    findConflicts([lab], { days, slots: [...slots, '12:30-13:30'], teachers: tight, rooms, names, labCountsAsOne }).length;
+  assert.equal(count(false), 1);
+  assert.equal(count(true), 0);
+});
+
+test('locked sessions pick up subject changes and stale locks are dropped', () => {
+  const changed = subjects.map((s) => (s.id === 'dbms' ? { ...s, teacherId: 't2', sessionsPerWeek: 1 } : s));
+  const lockedA = session('k1', { division_id: 'B', day: 'Monday', slot: '10:00-11:00', locked: true });
+  const lockedB = session('k2', { division_id: 'B', day: 'Tuesday', slot: '10:00-11:00', locked: true });
+  const request = buildSolverRequest({ days, slots, divisions, teachers, rooms, subjects: changed, locked: [lockedA, lockedB] });
+  const pinned = request.sessions.filter((s) => s.locked);
+  assert.deepEqual(pinned.map((s) => [s.id, s.teacher_id]), [['k1', 't2']]);
 });
 
 test('batch view shows the batch and whole-division sessions only', () => {

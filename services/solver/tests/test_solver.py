@@ -227,3 +227,27 @@ def test_negative_teacher_limit_is_rejected():
 
     with pytest.raises(ValidationError):
         TeacherConstraint(teacher_id="t1", max_lectures_per_day=-1, max_lectures_per_week=10)
+
+
+def test_lab_can_count_as_one_lecture_toward_teacher_limits():
+    labs = [session(f"lab{i}", subject="lab", kind="lab", duration_slots=2, room="lab1") for i in range(2)]
+    rooms = [Room(id="lab1", type="lab")]
+    limit = [TeacherConstraint(teacher_id="t1", max_lectures_per_day=1, max_lectures_per_week=2)]
+    strict = solve_timetable(SolverRequest(days=DAYS[:1], slots=SLOTS, sessions=labs, rooms=rooms, teacher_constraints=limit))
+    assert len(strict.scheduled) == 0
+    relaxed = solve_timetable(
+        SolverRequest(days=DAYS[:2], slots=SLOTS, sessions=labs, rooms=rooms, teacher_constraints=limit, lab_counts_as_one=True)
+    )
+    assert len(relaxed.scheduled) == 2
+
+
+def test_fixed_room_of_wrong_type_or_size_is_reported():
+    rooms = [Room(id="small", type="classroom", capacity=10)]
+    sessions = [session("lab", kind="lab", room="small", size=30)]
+    result = solve_timetable(SolverRequest(days=DAYS, slots=SLOTS, sessions=sessions, rooms=rooms, names={"small": "R-10"}))
+    assert any("fixed to room R-10, which is a classroom" in d for d in result.diagnostics)
+
+
+def test_non_time_slot_labels_are_reported():
+    result = solve_timetable(SolverRequest(days=DAYS, slots=["P1", "P2"], sessions=[session("a")]))
+    assert any("must look like 09:00-10:00" in d for d in result.diagnostics)

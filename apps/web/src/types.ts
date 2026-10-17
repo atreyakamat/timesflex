@@ -11,6 +11,16 @@ export interface InstitutionForm {
   slotDurationMinutes: number;
   breakAfterSlots: number | null;
   breakDurationMinutes: number | null;
+  /** Breaks and lunch, each after a period. When unset, the single legacy break above is used. */
+  breaks?: BreakRule[];
+  /** Count a multi-slot lab as one lecture toward a teacher's limits (default: each slot counts). */
+  labCountsAsOne?: boolean;
+}
+
+export interface BreakRule {
+  afterSlot: number;
+  minutes: number;
+  label: string;
 }
 
 export interface DepartmentForm {
@@ -116,6 +126,7 @@ export interface SolverRequest {
   teacher_constraints: TeacherConstraint[];
   rooms: SolverRoom[];
   names: Record<string, string>;
+  lab_counts_as_one?: boolean;
 }
 
 export interface ScheduledSession extends SessionRequest {

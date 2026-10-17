@@ -1,5 +1,7 @@
 import type {
+  BreakRule,
   Conflict,
+  InstitutionForm,
   DivisionForm,
   RoomForm,
   ScheduledSession,
@@ -31,16 +33,23 @@ const formatTime = (minutes: number) => {
   return `${hours}:${mins}`;
 };
 
-export const buildSlots = (
-  startTime: string,
-  endTime: string,
-  durationMinutes: number,
-  breakAfterSlots: number | null,
-  breakDurationMinutes: number | null,
-) => {
+/** The institution's breaks, falling back to the single legacy break for older profiles. */
+export const institutionBreaks = (institution: InstitutionForm): BreakRule[] => {
+  if (institution.breaks) return institution.breaks;
+  return institution.breakAfterSlots && institution.breakDurationMinutes
+    ? [{ afterSlot: institution.breakAfterSlots, minutes: institution.breakDurationMinutes, label: 'Break' }]
+    : [];
+};
+
+export const buildSlots = (startTime: string, endTime: string, durationMinutes: number, breaks: BreakRule[] = []) => {
   const slots: string[] = [];
-  if (!startTime || !endTime || durationMinutes <= 0) {
+  if (!startTime || !endTime || !(durationMinutes > 0)) {
     return slots;
+  }
+
+  const pause = new Map<number, number>();
+  for (const rule of breaks) {
+    if (rule.afterSlot > 0 && rule.minutes > 0) pause.set(rule.afterSlot, (pause.get(rule.afterSlot) ?? 0) + rule.minutes);
   }
 
   const endMinutes = parseTime(endTime);
@@ -51,14 +60,14 @@ export const buildSlots = (
     slots.push(`${formatTime(cursor)}-${formatTime(cursor + durationMinutes)}`);
     cursor += durationMinutes;
     slotIndex += 1;
-
-    if (breakAfterSlots && breakDurationMinutes && slotIndex === breakAfterSlots) {
-      cursor += breakDurationMinutes;
-    }
+    cursor += pause.get(slotIndex) ?? 0;
   }
 
   return slots;
 };
+
+export const slotsFor = (institution: InstitutionForm) =>
+  buildSlots(institution.startTime, institution.endTime, institution.slotDurationMinutes, institutionBreaks(institution));
 
 /** Slot indices followed by a break (the next slot does not start when this one ends). */
 export const breaksAfter = (slots: string[]) => {
@@ -119,7 +128,9 @@ export const buildSolverRequest = ({
   rooms,
   subjects,
   locked,
+  labCountsAsOne = false,
 }: {
+  labCountsAsOne?: boolean;
   days: string[];
   slots: string[];
   divisions: DivisionForm[];
@@ -131,13 +142,30 @@ export const buildSolverRequest = ({
   const pinnedCount = new Map<string, number>();
   const sessions: SessionRequest[] = [];
 
+  // Locked sessions keep their day, slot and room, but pick up any change made
+  // to their subject since (teacher, length, lab/lecture, class size). Locks that
+  // no longer match the setup are dropped so the solver places a fresh session.
   for (const session of locked) {
     const subject = subjects.find((item) => item.id === session.subject_id);
     const division = divisions.find((item) => item.id === session.division_id);
-    if (!subject || !division) continue;
-    const key = groupKey(division, subject, session.batch ?? null);
-    pinnedCount.set(key, (pinnedCount.get(key) ?? 0) + 1);
-    sessions.push({ ...session, locked: true });
+    if (!subject || !division || !subjectDivisions(subject, divisions).includes(division)) continue;
+    const batch = session.batch ?? null;
+    const batchedLab = subject.isLab && division.batches.length > 0;
+    if (batchedLab ? !batch || !division.batches.includes(batch) : batch) continue;
+    const key = groupKey(division, subject, batch);
+    const count = pinnedCount.get(key) ?? 0;
+    if (count >= subject.sessionsPerWeek) continue;
+    pinnedCount.set(key, count + 1);
+    sessions.push({
+      ...session,
+      teacher_id: teacherFor(subject, division.id),
+      room_id: subject.roomId || session.room_id,
+      kind: subject.isLab ? 'lab' : 'lecture',
+      duration_slots: subject.durationSlots,
+      size: groupSize(division, batch),
+      difficult: Boolean(subject.difficult),
+      locked: true,
+    });
   }
 
   for (const subject of subjects) {
@@ -184,6 +212,7 @@ export const buildSolverRequest = ({
       unavailable: timeRefs(days, slots, room.unavailableDays, room.unavailableSlots),
     })),
     names,
+    lab_counts_as_one: labCountsAsOne,
   };
 };
 
@@ -314,8 +343,17 @@ export const findConflicts = (
     teachers,
     rooms = [],
     names,
-  }: { days: string[]; slots: string[]; teachers: TeacherForm[]; rooms?: RoomForm[]; names: Record<string, string> },
+    labCountsAsOne = false,
+  }: {
+    days: string[];
+    slots: string[];
+    teachers: TeacherForm[];
+    rooms?: RoomForm[];
+    names: Record<string, string>;
+    labCountsAsOne?: boolean;
+  },
 ): Conflict[] => {
+  const load = (item: ScheduledSession) => (labCountsAsOne && item.kind === 'lab' ? 1 : item.duration_slots);
   const conflicts: Conflict[] = [];
   const name = (id: string) => names[id] ?? 'Unknown';
   const breaks = breaksAfter(slots);
@@ -357,6 +395,18 @@ export const findConflicts = (
         sessionIds: [session.id],
       });
     }
+    if (room && (room.type === 'lab') !== (session.kind === 'lab')) {
+      conflicts.push({
+        message:
+          session.kind === 'lab'
+            ? `${label} is a lab but Room ${room.name} is not a lab`
+            : `${label} is in lab ${room.name}, which is kept for lab sessions`,
+        sessionIds: [session.id],
+      });
+    }
+    if (teacher && session.kind === 'lab' && teacher.canTeachLabs === false) {
+      conflicts.push({ message: `${teacher.name} does not take labs (${label})`, sessionIds: [session.id] });
+    }
     if (room && session.size && room.capacity && room.capacity < session.size) {
       conflicts.push({
         message: `Room ${room.name} seats ${room.capacity} but ${label} has ${session.size} students`,
@@ -391,7 +441,7 @@ export const findConflicts = (
 
   for (const teacher of teachers) {
     const mine = sessions.filter((item) => item.teacher_id === teacher.id);
-    const weekly = mine.reduce((total, item) => total + item.duration_slots, 0);
+    const weekly = mine.reduce((total, item) => total + load(item), 0);
     if (weekly > teacher.maxLecturesPerWeek) {
       conflicts.push({
         message: `${teacher.name} teaches ${weekly} slots/week (limit ${teacher.maxLecturesPerWeek})`,
@@ -400,10 +450,10 @@ export const findConflicts = (
     }
     for (const day of days) {
       const today = mine.filter((item) => item.day === day);
-      const load = today.reduce((total, item) => total + item.duration_slots, 0);
-      if (load > teacher.maxLecturesPerDay) {
+      const daily = today.reduce((total, item) => total + load(item), 0);
+      if (daily > teacher.maxLecturesPerDay) {
         conflicts.push({
-          message: `${teacher.name} teaches ${load} slots on ${day} (limit ${teacher.maxLecturesPerDay})`,
+          message: `${teacher.name} teaches ${daily} slots on ${day} (limit ${teacher.maxLecturesPerDay})`,
           sessionIds: today.map((item) => item.id),
         });
       }

@@ -10,7 +10,7 @@ import type {
   TeacherForm,
   TimetableRecord,
 } from '../types';
-import { allViews, breaksAfter, buildGrid, isBlocked, matchesView, viewTitle, type ViewKey } from '../utils';
+import { allViews, breaksAfter, institutionBreaks, buildGrid, isBlocked, matchesView, viewTitle, type ViewKey } from '../utils';
 
 interface TimetablePreviewProps {
   institution: InstitutionForm;
@@ -34,6 +34,8 @@ interface TimetablePreviewProps {
   onSessionUpdate: (sessionId: string, patch: Partial<ScheduledSession>) => void;
   onSelectVersion: (id: string) => void;
   onSetStatus: (status: 'approved' | 'edited') => void;
+  onPlaceSession: (sessionId: string, where: { day: string; slot: string; room_id: string }) => void;
+  onUnplaceSession: (sessionId: string) => void;
   /** Viewers can browse and export but not generate or edit. */
   readOnly?: boolean;
 }
@@ -75,6 +77,8 @@ export function TimetablePreview({
   onSessionUpdate,
   onSelectVersion,
   onSetStatus,
+  onPlaceSession,
+  onUnplaceSession,
   readOnly = false,
 }: TimetablePreviewProps) {
   const [view, setView] = useState<ViewKey>('all');
@@ -100,6 +104,16 @@ export function TimetablePreview({
   const sessionLabel = (session: SessionRequest) =>
     `${names[session.subject_id] ?? 'Subject'} · ${names[session.division_id] ?? 'Division'}${session.batch ? ` ${session.batch}` : ''}`;
 
+  const [exportError, setExportError] = useState('');
+  // Break names by the slot index they follow, so the grid and exports say "Lunch" where it is lunch.
+  const breakLabels = useMemo(() => {
+    const labels: Record<number, string> = {};
+    for (const rule of institutionBreaks(institution)) {
+      labels[rule.afterSlot - 1] = labels[rule.afterSlot - 1] ? `${labels[rule.afterSlot - 1]} / ${rule.label}` : rule.label;
+    }
+    return labels;
+  }, [institution]);
+
   const handleExport = async (format: 'xlsx' | 'pdf') => {
     const everything = allViews(divisions, teachers, rooms);
     const views: ViewKey[] =
@@ -116,12 +130,20 @@ export function TimetablePreview({
       sessions: scheduledSessions,
       names,
       views,
+      breakLabels,
     };
+    if (views.length === 0) {
+      setExportError('There is nothing to export for that choice.');
+      return;
+    }
     const filename = `${institution.name || departmentLabel} ${scope === 'view' ? title : scope}`;
     setExporting(format);
+    setExportError('');
     try {
       if (format === 'xlsx') await exportExcel(input, filename);
       else await exportPdf(input, filename);
+    } catch (error) {
+      setExportError(`Export failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     } finally {
       setExporting('');
     }
@@ -262,7 +284,7 @@ export function TimetablePreview({
             <select value={scope} onChange={(e) => setScope(e.target.value as ExportScope)}>
               <option value="view">This view</option>
               <option value="classes">Every class</option>
-              <option value="batches">Every batch</option>
+              {divisions.some((item) => item.batches.length) && <option value="batches">Every batch</option>}
               <option value="teachers">Every teacher</option>
               <option value="rooms">Every room</option>
               <option value="everything">Everything</option>
@@ -278,6 +300,11 @@ export function TimetablePreview({
             Print
           </button>
         </div>
+        {exportError && (
+          <p className="text-danger no-print" role="alert">
+            {exportError}
+          </p>
+        )}
         <h2 className="print-title">{title}</h2>
       </div>
 
@@ -368,7 +395,7 @@ export function TimetablePreview({
                 {breaks.has(index) && (
                   <tr className="break-row">
                     <th className="slot">{`${slot.split('-')[1]} – ${slots[index + 1].split('-')[0]}`}</th>
-                    <td colSpan={days.length}>Break</td>
+                    <td colSpan={days.length}>{breakLabels[index] || 'Break'}</td>
                   </tr>
                 )}
               </Fragment>
@@ -385,7 +412,7 @@ export function TimetablePreview({
               <li key={item}>{item}</li>
             ))}
           </ul>
-          {unscheduledSessions.length > 0 && (
+          {unscheduledSessions.length > 0 && !canEditSessions && (
             <p>
               Not placed:{' '}
               {Object.entries(
@@ -398,6 +425,24 @@ export function TimetablePreview({
                 .map(([label, count]) => `${label} ×${count}`)
                 .join(', ')}
             </p>
+          )}
+          {unscheduledSessions.length > 0 && canEditSessions && (
+            <>
+              <p>Place these by hand. Any clash shows up as a conflict before you approve.</p>
+              <div className="list">
+                {unscheduledSessions.map((session) => (
+                  <PlaceSessionRow
+                    key={session.id}
+                    label={`${sessionLabel(session)} · ${names[session.teacher_id] ?? 'Teacher'}`}
+                    session={session}
+                    days={days}
+                    slots={slots}
+                    rooms={rooms}
+                    onPlace={(where) => onPlaceSession(session.id, where)}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
       )}
@@ -433,10 +478,26 @@ export function TimetablePreview({
                         </option>
                       ))}
                     </select>
-                    <select value={session.room_id} onChange={(event) => onSessionUpdate(session.id, { room_id: event.target.value })}>
+                    <select
+                      aria-label="Room"
+                      value={session.room_id}
+                      onChange={(event) => onSessionUpdate(session.id, { room_id: event.target.value })}
+                    >
                       {rooms.map((room) => (
                         <option key={room.id} value={room.id}>
                           {room.name}
+                          {(room.type === 'lab') !== (session.kind === 'lab') ? ' (wrong type)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="Teacher"
+                      value={session.teacher_id}
+                      onChange={(event) => onSessionUpdate(session.id, { teacher_id: event.target.value })}
+                    >
+                      {teachers.map((teacher) => (
+                        <option key={teacher.id} value={teacher.id}>
+                          {teacher.name}
                         </option>
                       ))}
                     </select>
@@ -448,6 +509,14 @@ export function TimetablePreview({
                     >
                       {session.locked ? '🔒 Locked' : 'Lock'}
                     </button>
+                    <button
+                      type="button"
+                      className="chip"
+                      onClick={() => onUnplaceSession(session.id)}
+                      title="Take this session out of the grid"
+                    >
+                      Unplace
+                    </button>
                   </div>
                 </div>
               ))}
@@ -456,5 +525,64 @@ export function TimetablePreview({
         </div>
       )}
     </section>
+  );
+}
+
+function PlaceSessionRow({
+  label,
+  session,
+  days,
+  slots,
+  rooms,
+  onPlace,
+}: {
+  label: string;
+  session: SessionRequest;
+  days: string[];
+  slots: string[];
+  rooms: RoomForm[];
+  onPlace: (where: { day: string; slot: string; room_id: string }) => void;
+}) {
+  // Suitable rooms first: right type, then anything else marked as such.
+  const fits = (room: RoomForm) => (room.type === 'lab') === (session.kind === 'lab');
+  const ordered = [...rooms.filter(fits), ...rooms.filter((room) => !fits(room))];
+  const [day, setDay] = useState(days[0] ?? '');
+  const [slot, setSlot] = useState(slots[0] ?? '');
+  const [roomId, setRoomId] = useState(session.room_id || ordered[0]?.id || '');
+
+  return (
+    <div className="list-item">
+      <div className="list-content">
+        <strong>{label}</strong>
+        <span>{session.duration_slots} slot(s)</span>
+      </div>
+      <div className="inline-fields">
+        <select aria-label="Day" value={day} onChange={(event) => setDay(event.target.value)}>
+          {days.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+        <select aria-label="Start slot" value={slot} onChange={(event) => setSlot(event.target.value)}>
+          {slots.map((item) => (
+            <option key={item} value={item}>
+              {gridLabel(item)}
+            </option>
+          ))}
+        </select>
+        <select aria-label="Room" value={roomId} onChange={(event) => setRoomId(event.target.value)}>
+          {ordered.map((room) => (
+            <option key={room.id} value={room.id}>
+              {room.name}
+              {fits(room) ? '' : ' (wrong type)'}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="secondary" disabled={!day || !slot || !roomId} onClick={() => onPlace({ day, slot, room_id: roomId })}>
+          Place
+        </button>
+      </div>
+    </div>
   );
 }

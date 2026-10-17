@@ -265,3 +265,13 @@ test('changing your password signs out other devices', async (t) => {
   assert.equal((await laptop('GET', '/api/institutions')).status, 401);
   assert.equal((await call('GET', '/api/institutions')).status, 200);
 });
+
+test('saving edits can update the unplaced-session report', async (t) => {
+  const { call } = await start(t);
+  const { timetable } = await createGenerated(call);
+  const url = `/api/timetables/${timetable.id}`;
+  const report = { unscheduledSessions: [], diagnostics: ['placed by hand'] };
+  const saved = await call('PUT', url, { generatedSessions: [SESSION], report });
+  assert.deepEqual(saved.body.report, report);
+  assert.equal((await call('PUT', url, { generatedSessions: [SESSION], report: { nope: 1 } })).status, 400);
+});

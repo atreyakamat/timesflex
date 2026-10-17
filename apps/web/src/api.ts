@@ -123,7 +123,11 @@ export const solveTimetable = async (timetableId: string): Promise<{ timetable: 
 /** Save edited sessions and/or change the version status (e.g. approve it). */
 export const updateTimetable = async (
   timetableId: string,
-  changes: { generatedSessions?: SolverResult['scheduled_sessions']; status?: TimetableStatus },
+  changes: {
+    generatedSessions?: SolverResult['scheduled_sessions'];
+    report?: TimetableRecord['report'];
+    status?: TimetableStatus;
+  },
 ): Promise<TimetableRecord> => {
   return requestJson(`/api/timetables/${timetableId}`, {
     method: 'PUT',

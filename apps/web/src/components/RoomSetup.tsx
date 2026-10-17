@@ -20,7 +20,7 @@ export function RoomSetup({ rooms, days, slots, onAddRoom, onUpdateRoom, onRemov
 
   const handleAdd = () => {
     if (!name.trim()) return;
-    onAddRoom({ id: createId(), name: name.trim(), type, capacity, equipment: '' });
+    onAddRoom({ id: createId(), name: name.trim(), type, capacity: Math.max(1, Math.round(capacity) || 1), equipment: '' });
     setName('');
   };
 
@@ -55,7 +55,18 @@ export function RoomSetup({ rooms, days, slots, onAddRoom, onUpdateRoom, onRemov
             <div key={room.id} className="list-item stacked">
               <div className="list-row">
                 <div className="list-content">
-                  <strong>{room.name}</strong>
+                  <input
+                    key={room.name}
+                    className="name-input"
+                    type="text"
+                    aria-label="Room name"
+                    defaultValue={room.name}
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (value && value !== room.name) onUpdateRoom({ ...room, name: value });
+                      else e.target.value = room.name;
+                    }}
+                  />
                   <span>
                     {room.type} · {room.capacity} seats{closed ? ` · ${closed} closed` : ''}
                   </span>
@@ -87,7 +98,7 @@ export function RoomSetup({ rooms, days, slots, onAddRoom, onUpdateRoom, onRemov
                   <button type="button" className="secondary small" onClick={() => setOpen(open === room.id ? null : room.id)}>
                     {open === room.id ? 'Hide availability' : 'Availability'}
                   </button>
-                  <button type="button" className="text-danger" onClick={() => onRemoveRoom(room.id)}>
+                  <button type="button" className="text-danger" onClick={() => window.confirm(`Delete ${room.name}?`) && onRemoveRoom(room.id)}>
                     Delete
                   </button>
                 </div>

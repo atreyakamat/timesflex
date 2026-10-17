@@ -57,6 +57,8 @@ class SolverRequest(BaseModel):
     # Optional id -> display name map, used only to make diagnostics readable.
     names: dict[str, str] = Field(default_factory=dict)
     time_limit_seconds: float = Field(default=10.0, gt=0, le=120)
+    # When true a multi-slot lab counts as one lecture toward teacher limits.
+    lab_counts_as_one: bool = False
 
 
 class ScheduledSession(BaseModel):

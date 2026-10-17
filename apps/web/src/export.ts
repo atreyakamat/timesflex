@@ -15,6 +15,8 @@ export interface ExportInput {
   sessions: ScheduledSession[];
   names: Record<string, string>;
   views: ViewKey[];
+  /** Name of the break after slot index i (e.g. "Lunch"); defaults to "Break". */
+  breakLabels?: Record<number, string>;
 }
 
 interface TableRow {
@@ -40,7 +42,7 @@ const cellText = (session: ScheduledSession, view: ViewKey, names: Record<string
   return `${heading}\n${details.join(' · ')}`;
 };
 
-export const buildTables = ({ days, slots, sessions, names, views }: ExportInput): Table[] => {
+export const buildTables = ({ days, slots, sessions, names, views, breakLabels = {} }: ExportInput): Table[] => {
   const breaks = breaksAfter(slots);
   return views.map((view) => {
     const grid = buildGrid(days, slots, sessions.filter((session) => matchesView(session, view)));
@@ -59,7 +61,8 @@ export const buildTables = ({ days, slots, sessions, names, views }: ExportInput
       });
       if (breaks.has(index)) {
         const gap = `${slot.split('-')[1]} – ${slots[index + 1].split('-')[0]}`;
-        rows.push({ label: gap, isBreak: true, cells: days.map(() => ({ text: 'Break', lab: false })) });
+        const text = breakLabels[index] || 'Break';
+        rows.push({ label: gap, isBreak: true, cells: days.map(() => ({ text, lab: false })) });
       }
     });
     return { title: viewTitle(view, names), rows };
@@ -133,7 +136,7 @@ const sheetXml = (table: Table, days: string[], subtitle: string) => {
     const r = index + 4;
     if (row.isBreak) {
       rows.push(
-        `<row r="${r}">${cell(`A${r}`, row.label, STYLE.slot)}${days.map((_, i) => cell(`${column(i + 1)}${r}`, 'Break', STYLE.break)).join('')}</row>`,
+        `<row r="${r}">${cell(`A${r}`, row.label, STYLE.slot)}${days.map((_, i) => cell(`${column(i + 1)}${r}`, row.cells[i].text, STYLE.break)).join('')}</row>`,
       );
       return;
     }
@@ -243,7 +246,7 @@ export const buildPdf = async (input: ExportInput) => {
           ? [
               { content: latin(row.label), styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } },
               {
-                content: 'Break',
+                content: latin(row.cells[0]?.text ?? 'Break'),
                 colSpan: input.days.length,
                 styles: { halign: 'center', fontStyle: 'italic', textColor: [100, 116, 139], fillColor: [241, 245, 249] },
               },

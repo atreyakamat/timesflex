@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import {
   createInstitution,
@@ -31,7 +31,7 @@ import type {
   TeacherForm,
   TimetableRecord,
 } from './types';
-import { buildSlots, buildSolverRequest, createId, findConflicts, setupProblems, setupWarnings } from './utils';
+import { buildSolverRequest, slotsFor, createId, findConflicts, setupProblems, setupWarnings } from './utils';
 
 const dayOptions = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -64,6 +64,18 @@ const steps = [
 
 const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
+// Snapshots used to tell whether anything changed since the last save or load.
+const profileKey = (value: {
+  institution: InstitutionForm;
+  department: DepartmentForm;
+  divisions: DivisionForm[];
+  teachers: TeacherForm[];
+  rooms: RoomForm[];
+  subjects: SubjectForm[];
+}) => JSON.stringify(value);
+const sessionsKey = (scheduled: ScheduledSession[], unscheduled: SessionRequest[]) => JSON.stringify([scheduled, unscheduled]);
+const EMPTY_SESSIONS = sessionsKey([], []);
+
 interface AppProps {
   user: AuthUser;
   onSignOut: () => Promise<void>;
@@ -72,7 +84,7 @@ interface AppProps {
 export function App({ user, onSignOut }: AppProps) {
   // Single-owner app: admins set everything up; viewers browse and export timetables.
   const canEdit = user.role === 'admin';
-  const visibleSteps = canEdit ? steps : steps.filter((step) => step.id === 'generate');
+  const visibleSteps = canEdit ? steps : [{ id: 'generate', label: 'Timetable' }];
   const [view, setView] = useState<'dashboard' | 'editor' | 'users'>('dashboard');
   const [activeStep, setActiveStep] = useState(steps[0].id);
   const [institution, setInstitution] = useState(initialInstitution);
@@ -89,6 +101,28 @@ export function App({ user, onSignOut }: AppProps) {
   const [unscheduledSessions, setUnscheduledSessions] = useState<SessionRequest[]>([]);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [versions, setVersions] = useState<TimetableRecord[]>([]);
+  const [savedProfile, setSavedProfile] = useState(() =>
+    profileKey({ institution: initialInstitution, department: initialDepartment, divisions: [], teachers: [], rooms: [], subjects: [] }),
+  );
+  const [savedSessions, setSavedSessions] = useState(EMPTY_SESSIONS);
+
+  const currentProfile = profileKey({ institution, department, divisions, teachers, rooms, subjects });
+  const profileDirty = canEdit && currentProfile !== savedProfile;
+  const sessionsDirty = canEdit && sessionsKey(scheduledSessions, unscheduledSessions) !== savedSessions;
+  const dirty = profileDirty || sessionsDirty;
+
+  // Warn before closing or reloading the tab with unsaved work.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  const confirmDiscard = (what: string) => !dirty || window.confirm(`You have unsaved changes. ${what}`);
 
   const resetSchedule = () => {
     setVersions([]);
@@ -96,6 +130,7 @@ export function App({ user, onSignOut }: AppProps) {
     setScheduledSessions([]);
     setUnscheduledSessions([]);
     setDiagnostics([]);
+    setSavedSessions(EMPTY_SESSIONS);
   };
 
   const showVersion = (version: TimetableRecord) => {
@@ -103,18 +138,26 @@ export function App({ user, onSignOut }: AppProps) {
     setScheduledSessions(version.generatedSessions ?? []);
     setUnscheduledSessions(version.report?.unscheduledSessions ?? []);
     setDiagnostics(version.report?.diagnostics ?? []);
+    setSavedSessions(sessionsKey(version.generatedSessions ?? [], version.report?.unscheduledSessions ?? []));
   };
 
   const handleLoadInstitution = async (record: InstitutionRecord) => {
-    const profile = (record.data as any)?.profile || record.data;
-    if (profile) {
-      setInstitution({ ...initialInstitution, ...(profile.institution ?? {}) });
-      setDepartment(profile.department || initialDepartment);
-      setDivisions(profile.divisions || []);
-      setTeachers(profile.teachers || []);
-      setRooms(profile.rooms || []);
-      setSubjects(profile.subjects || []);
-    }
+    const profile = (record.data as any)?.profile || record.data || {};
+    const loaded = {
+      institution: { ...initialInstitution, ...(profile.institution ?? {}) },
+      department: profile.department || initialDepartment,
+      divisions: profile.divisions || [],
+      teachers: profile.teachers || [],
+      rooms: profile.rooms || [],
+      subjects: profile.subjects || [],
+    };
+    setInstitution(loaded.institution);
+    setDepartment(loaded.department);
+    setDivisions(loaded.divisions);
+    setTeachers(loaded.teachers);
+    setRooms(loaded.rooms);
+    setSubjects(loaded.subjects);
+    setSavedProfile(profileKey(loaded));
     setInstitutionId(record.id);
     resetSchedule();
     setView('editor');
@@ -135,6 +178,9 @@ export function App({ user, onSignOut }: AppProps) {
   };
 
   const handleNewInstitution = () => {
+    setSavedProfile(
+      profileKey({ institution: initialInstitution, department: initialDepartment, divisions: [], teachers: [], rooms: [], subjects: [] }),
+    );
     setInstitution(initialInstitution);
     setDepartment(initialDepartment);
     setDivisions([]);
@@ -217,6 +263,8 @@ export function App({ user, onSignOut }: AppProps) {
       slotDurationMinutes: inst.slotDurationMinutes ?? current.slotDurationMinutes,
       breakAfterSlots: inst.breakAfterSlots ?? current.breakAfterSlots,
       breakDurationMinutes: inst.breakDurationMinutes ?? current.breakDurationMinutes,
+      // A break described in the chat replaces the break list; otherwise keep what was set up.
+      breaks: inst.breakAfterSlots && inst.breakDurationMinutes ? undefined : current.breaks,
     }));
     setTeachers(nextTeachers);
     setRooms(nextRooms);
@@ -232,23 +280,7 @@ export function App({ user, onSignOut }: AppProps) {
     );
   };
 
-  const slots = useMemo(
-    () =>
-      buildSlots(
-        institution.startTime,
-        institution.endTime,
-        institution.slotDurationMinutes,
-        institution.breakAfterSlots,
-        institution.breakDurationMinutes,
-      ),
-    [
-      institution.startTime,
-      institution.endTime,
-      institution.slotDurationMinutes,
-      institution.breakAfterSlots,
-      institution.breakDurationMinutes,
-    ],
-  );
+  const slots = useMemo(() => slotsFor(institution), [institution]);
 
   const names = useMemo(() => {
     const map: Record<string, string> = {};
@@ -257,8 +289,15 @@ export function App({ user, onSignOut }: AppProps) {
   }, [divisions, teachers, rooms, subjects]);
 
   const conflicts = useMemo(
-    () => findConflicts(scheduledSessions, { days: institution.workingDays, slots, teachers, rooms, names }),
-    [scheduledSessions, institution.workingDays, slots, teachers, rooms, names],
+    () => findConflicts(scheduledSessions, {
+        days: institution.workingDays,
+        slots,
+        teachers,
+        rooms,
+        names,
+        labCountsAsOne: Boolean(institution.labCountsAsOne),
+      }),
+    [scheduledSessions, institution.workingDays, institution.labCountsAsOne, slots, teachers, rooms, names],
   );
 
   const profile = { days: institution.workingDays, slots, divisions, subjects, teachers, rooms };
@@ -272,18 +311,24 @@ export function App({ user, onSignOut }: AppProps) {
       type: institution.type,
       profile: { institution, department, divisions, teachers, rooms, subjects, slots },
     };
+    const snapshot = currentProfile;
     if (institutionId) {
       await updateInstitution(institutionId, payload);
+      setSavedProfile(snapshot);
       return institutionId;
     }
     const record = await createInstitution(payload);
     setInstitutionId(record.id);
+    setSavedProfile(snapshot);
     return record.id;
   };
 
   const handleGenerate = async () => {
     if (problems.length) {
       setStatusMessage('Fix the setup issues listed on the Generate tab first.');
+      return;
+    }
+    if (sessionsDirty && !window.confirm('Regenerating keeps only locked sessions. Unsaved moves to other sessions will not carry over. Continue?')) {
       return;
     }
     setBusy(true);
@@ -300,6 +345,7 @@ export function App({ user, onSignOut }: AppProps) {
         rooms,
         subjects,
         locked,
+        labCountsAsOne: Boolean(institution.labCountsAsOne),
       });
 
       setStatusMessage('Creating timetable version...');
@@ -312,9 +358,7 @@ export function App({ user, onSignOut }: AppProps) {
       // Only switch to the new version once it has a result, so a failed solve
       // leaves the previous version on screen and as the save target.
       setTimetableId(timetableRecord.id);
-      setScheduledSessions(solved.solver.scheduled_sessions);
-      setUnscheduledSessions(solved.solver.unscheduled_sessions);
-      setDiagnostics(solved.solver.diagnostics ?? []);
+      showVersion(solved.timetable);
       setVersions([solved.timetable, ...versions]);
       setStatusMessage(
         solved.solver.status === 'ok'
@@ -337,6 +381,23 @@ export function App({ user, onSignOut }: AppProps) {
   const currentVersion = versions.find((version) => version.id === timetableId);
   const isApproved = currentVersion?.status === 'approved';
 
+  /** Put a session the solver could not place into the timetable by hand. */
+  const handlePlaceSession = (sessionId: string, where: { day: string; slot: string; room_id: string }) => {
+    const session = unscheduledSessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    setUnscheduledSessions((current) => current.filter((item) => item.id !== sessionId));
+    setScheduledSessions((current) => [...current, { ...session, ...where, batch: session.batch ?? null, locked: false }]);
+  };
+
+  /** Take a session out of the grid; it goes back to the unplaced list. */
+  const handleUnplaceSession = (sessionId: string) => {
+    const session = scheduledSessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    const { day: _day, slot: _slot, ...rest } = session;
+    setScheduledSessions((current) => current.filter((item) => item.id !== sessionId));
+    setUnscheduledSessions((current) => [...current, { ...rest, locked: false }]);
+  };
+
   const handleSaveEdits = async () => {
     setBusy(true);
     setStatusMessage('Saving...');
@@ -344,8 +405,12 @@ export function App({ user, onSignOut }: AppProps) {
       await saveProfile();
       // Approved versions are read-only on the server; saving the profile must not touch them.
       if (timetableId && !isApproved) {
-        const saved = await updateTimetable(timetableId, { generatedSessions: scheduledSessions });
+        const saved = await updateTimetable(timetableId, {
+          generatedSessions: scheduledSessions,
+          report: { unscheduledSessions, diagnostics },
+        });
         setVersions((list) => list.map((version) => (version.id === saved.id ? saved : version)));
+        setSavedSessions(sessionsKey(scheduledSessions, unscheduledSessions));
       }
       setStatusMessage(
         !timetableId
@@ -364,6 +429,7 @@ export function App({ user, onSignOut }: AppProps) {
   const handleSelectVersion = (id: string) => {
     const version = versions.find((item) => item.id === id);
     if (!version) return;
+    if (sessionsDirty && !window.confirm('You have unsaved timetable edits. Switch versions and discard them?')) return;
     showVersion(version);
     setStatusMessage(`Showing ${version.label} (${version.status}).`);
   };
@@ -376,8 +442,11 @@ export function App({ user, onSignOut }: AppProps) {
       // Unapproving only changes the status.
       const saved = await updateTimetable(
         timetableId,
-        status === 'approved' ? { generatedSessions: scheduledSessions, status } : { status },
+        status === 'approved'
+          ? { generatedSessions: scheduledSessions, report: { unscheduledSessions, diagnostics }, status }
+          : { status },
       );
+      if (status === 'approved') setSavedSessions(sessionsKey(scheduledSessions, unscheduledSessions));
       setVersions((list) => list.map((version) => (version.id === saved.id ? saved : version)));
       setStatusMessage(
         status === 'approved' ? `${saved.label} approved. Export it from this tab.` : `${saved.label} reopened for edits.`,
@@ -417,7 +486,10 @@ export function App({ user, onSignOut }: AppProps) {
               </div>
             </div>
 
-            <button className="nav-back" onClick={() => setView('dashboard')}>
+            <button
+              className="nav-back"
+              onClick={() => confirmDiscard('Leave without saving?') && setView('dashboard')}
+            >
               ← Back to Dashboard
             </button>
 
@@ -438,7 +510,12 @@ export function App({ user, onSignOut }: AppProps) {
                 Save profile
               </button>
             )}
-            <div className="status-card">
+            {dirty && (
+              <p className="unsaved" role="status">
+                Unsaved changes
+              </p>
+            )}
+            <div className="status-card" aria-live="polite">
               <span>Status</span>
               <p>{statusMessage || 'Fill the setup tabs to start generating.'}</p>
             </div>
@@ -531,6 +608,8 @@ export function App({ user, onSignOut }: AppProps) {
                 onSessionUpdate={handleSessionUpdate}
                 onSelectVersion={handleSelectVersion}
                 onSetStatus={handleSetStatus}
+                onPlaceSession={handlePlaceSession}
+                onUnplaceSession={handleUnplaceSession}
                 readOnly={!canEdit}
               />
             )}
