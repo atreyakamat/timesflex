@@ -198,3 +198,13 @@ export interface Conflict {
   message: string;
   sessionIds: string[];
 }
+
+export type UserRole = 'admin' | 'viewer';
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  role: UserRole;
+  disabled: boolean;
+  createdAt?: string;
+}

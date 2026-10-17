@@ -16,7 +16,9 @@ import { RoomSetup } from './components/RoomSetup';
 import { SubjectSetup } from './components/SubjectSetup';
 import { TeacherSetup } from './components/TeacherSetup';
 import { TimetablePreview } from './components/TimetablePreview';
+import { UserManagement } from './components/UserManagement';
 import type {
+  AuthUser,
   ChatDraft,
   DepartmentForm,
   DivisionForm,
@@ -62,8 +64,16 @@ const steps = [
 
 const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-export function App() {
-  const [view, setView] = useState<'dashboard' | 'editor'>('dashboard');
+interface AppProps {
+  user: AuthUser;
+  onSignOut: () => Promise<void>;
+}
+
+export function App({ user, onSignOut }: AppProps) {
+  // Single-owner app: admins set everything up; viewers browse and export timetables.
+  const canEdit = user.role === 'admin';
+  const visibleSteps = canEdit ? steps : steps.filter((step) => step.id === 'generate');
+  const [view, setView] = useState<'dashboard' | 'editor' | 'users'>('dashboard');
   const [activeStep, setActiveStep] = useState(steps[0].id);
   const [institution, setInstitution] = useState(initialInstitution);
   const [department, setDepartment] = useState(initialDepartment);
@@ -381,11 +391,19 @@ export function App() {
 
   return (
     <div className="app-shell">
-      {view === 'dashboard' ? (
+      {view === 'users' ? (
+        <main className="content" style={{ gridColumn: '1 / -1' }}>
+          <UserManagement currentUser={user} onClose={() => setView('dashboard')} />
+        </main>
+      ) : view === 'dashboard' ? (
         <main className="content" style={{ gridColumn: '1 / -1' }}>
           <Dashboard
+            user={user}
+            canEdit={canEdit}
             onLoadInstitution={handleLoadInstitution}
             onNewInstitution={handleNewInstitution}
+            onOpenUsers={() => setView('users')}
+            onSignOut={onSignOut}
           />
         </main>
       ) : (
@@ -404,7 +422,7 @@ export function App() {
             </button>
 
             <nav className="step-list">
-              {steps.map((step) => (
+              {visibleSteps.map((step) => (
                 <button
                   key={step.id}
                   type="button"
@@ -415,9 +433,11 @@ export function App() {
                 </button>
               ))}
             </nav>
-            <button type="button" className="secondary" onClick={handleSaveEdits} disabled={busy}>
-              Save profile
-            </button>
+            {canEdit && (
+              <button type="button" className="secondary" onClick={handleSaveEdits} disabled={busy}>
+                Save profile
+              </button>
+            )}
             <div className="status-card">
               <span>Status</span>
               <p>{statusMessage || 'Fill the setup tabs to start generating.'}</p>
@@ -511,6 +531,7 @@ export function App() {
                 onSessionUpdate={handleSessionUpdate}
                 onSelectVersion={handleSelectVersion}
                 onSetStatus={handleSetStatus}
+                readOnly={!canEdit}
               />
             )}
           </main>

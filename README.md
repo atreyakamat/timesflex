@@ -15,8 +15,28 @@ ollama pull qwen3:0.6b   # optional, ~520 MB; enables AI quick setup
 npm run dev          # solver :8000, API :3001, web http://localhost:5173
 ```
 
-No database setup is needed: without `DATABASE_URL` the API stores data in `apps/api/data/timesflex.json`.
-Set `DATABASE_URL=postgres://user:pass@localhost:5432/timesflex` to use PostgreSQL instead.
+The pilot runs on PostgreSQL: set `DATABASE_URL=postgres://user:pass@localhost:5432/timesflex` and the API
+creates and migrates its tables on start. Without it, the API falls back to a JSON file
+(`apps/api/data/timesflex.json`), which is fine for a quick demo.
+
+### Accounts and roles
+
+The first time you open the app it asks you to create the **owner** account. TimeFlex is single-owner:
+
+| Role | Can do |
+|---|---|
+| Admin | Set up the institution, teachers, rooms and subjects; generate, edit and approve timetables; manage users |
+| Viewer | Browse timetables and export them as Excel or PDF |
+
+Admins add viewer accounts for staff under **Users**. Approved timetables are locked until an admin unapproves them.
+If you lose the admin password, reset it from the server:
+
+```bash
+npm run admin -w @timesflex/api -- owner   # prompts for a new password; creates the user if missing
+```
+
+For a single-port setup, run `npm run build` and start only the API: it serves the built web app at
+http://localhost:3001.
 
 ## Workspace layout
 - `apps/web`: React frontend for setup, generation, and editing
@@ -110,9 +130,14 @@ scored 80%, so expect occasional misses on unfamiliar phrasing. That is why ever
 | `AI_TIMEOUT_MS` | `120000` | first call also loads the model |
 | `DATABASE_URL` | unset | PostgreSQL connection string; unset uses the JSON file store |
 | `SOLVER_URL` | `http://127.0.0.1:8000/solve` | |
+| `SOLVER_TIMEOUT_MS` | `150000` | the API gives up on a solve after this |
+| `COOKIE_SECURE` | `false` | set `true` when the app is served over HTTPS |
+| `CORS_ORIGINS` | unset | comma-separated extra origins; same-origin needs none |
+| `WEB_DIST` | `apps/web/dist` | built web app the API serves |
 
 ## Tests
 ```bash
-npm test             # API parser tests, web logic + export tests (node:test), solver tests (pytest)
+npm test             # API route, auth, store and parser tests; web logic + export tests; solver tests (pytest)
+TEST_DATABASE_URL=postgres://... npm test   # also runs the store tests against a throwaway PostgreSQL database
 npm run typecheck
 ```

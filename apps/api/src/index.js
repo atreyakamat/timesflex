@@ -13,7 +13,15 @@ const store = await createStore({
   dataFile: process.env.DATA_FILE ?? path.resolve(here, '../data/timesflex.json'),
 });
 
-const app = createApp({ store, solve: solveWithSolver, parse: parseRequirements, aiConfig, aiStatus });
+const app = createApp({
+  store,
+  solve: solveWithSolver,
+  parse: parseRequirements,
+  aiConfig,
+  aiStatus,
+  webDist: process.env.WEB_DIST ?? path.resolve(here, '../../web/dist'),
+  allowedOrigins: (process.env.CORS_ORIGINS ?? '').split(',').map((item) => item.trim()).filter(Boolean),
+});
 const port = process.env.PORT ?? 3001;
 
 app.listen(port, () => {

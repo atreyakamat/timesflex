@@ -34,6 +34,8 @@ interface TimetablePreviewProps {
   onSessionUpdate: (sessionId: string, patch: Partial<ScheduledSession>) => void;
   onSelectVersion: (id: string) => void;
   onSetStatus: (status: 'approved' | 'edited') => void;
+  /** Viewers can browse and export but not generate or edit. */
+  readOnly?: boolean;
 }
 
 type ExportScope = 'view' | 'classes' | 'batches' | 'teachers' | 'rooms' | 'everything';
@@ -73,6 +75,7 @@ export function TimetablePreview({
   onSessionUpdate,
   onSelectVersion,
   onSetStatus,
+  readOnly = false,
 }: TimetablePreviewProps) {
   const [view, setView] = useState<ViewKey>('all');
   const [scope, setScope] = useState<ExportScope>('view');
@@ -124,8 +127,12 @@ export function TimetablePreview({
     }
   };
 
+  // Approved versions are frozen until an admin unapproves them.
+  const canEditSessions = !readOnly && current?.status !== 'approved';
+
   const onDrop = (event: DragEvent, day: string, slot: string) => {
     event.preventDefault();
+    if (!canEditSessions) return;
     setDragOver(null);
     const id = event.dataTransfer.getData('text/plain');
     if (id) onSessionUpdate(id, { day, slot });
@@ -134,11 +141,15 @@ export function TimetablePreview({
   return (
     <section className="card">
       <header>
-        <h1>Generate timetable</h1>
-        <p>Solve the schedule, then fine tune it: drag sessions to move them, lock the ones you like, and regenerate the rest.</p>
+        <h1>{readOnly ? 'Timetable' : 'Generate timetable'}</h1>
+        <p>
+          {readOnly
+            ? 'Browse each class, teacher and room view, and export it as Excel or PDF.'
+            : 'Solve the schedule, then fine tune it: drag sessions to move them, lock the ones you like, and regenerate the rest.'}
+        </p>
       </header>
 
-      {problems.length > 0 && (
+      {!readOnly && problems.length > 0 && (
         <div className="card warning">
           <h3>Before generating</h3>
           <ul>
@@ -148,7 +159,7 @@ export function TimetablePreview({
           </ul>
         </div>
       )}
-      {warnings.length > 0 && (
+      {!readOnly && warnings.length > 0 && (
         <ul className="draft-warnings">
           {warnings.map((warning) => (
             <li key={warning}>{warning}</li>
@@ -156,6 +167,7 @@ export function TimetablePreview({
         </ul>
       )}
 
+      {!readOnly && (
       <div className="action-row no-print">
         <button type="button" className="primary" onClick={onGenerate} disabled={busy || problems.length > 0}>
           {busy
@@ -164,7 +176,7 @@ export function TimetablePreview({
               ? `Regenerate${lockedCount ? ` (keep ${lockedCount} locked)` : ''}`
               : 'Generate timetable'}
         </button>
-        <button type="button" className="secondary" onClick={onSaveEdits} disabled={busy}>
+        <button type="button" className="secondary" onClick={onSaveEdits} disabled={busy || !canEditSessions}>
           Save edits
         </button>
         {current && (
@@ -178,7 +190,9 @@ export function TimetablePreview({
             {current.status === 'approved' ? 'Unapprove' : 'Approve version'}
           </button>
         )}
+        {current?.status === 'approved' && <span className="hint">Approved versions are locked. Unapprove to edit.</span>}
       </div>
+      )}
 
       {versions.length > 0 && (
         <div className="version-bar no-print">
@@ -301,6 +315,7 @@ export function TimetablePreview({
                         key={cellKey}
                         className={`${dragOver === cellKey ? 'drop-target' : ''} ${blocked ? 'blocked' : ''}`}
                         onDragOver={(event) => {
+                          if (!canEditSessions) return;
                           event.preventDefault();
                           if (dragOver !== cellKey) setDragOver(cellKey);
                         }}
@@ -313,14 +328,20 @@ export function TimetablePreview({
                           return (
                             <div
                               key={session.id}
-                              draggable={!continued}
+                              draggable={canEditSessions && !continued}
                               onDragStart={(event) => {
                                 event.dataTransfer.setData('text/plain', session.id);
                                 event.dataTransfer.effectAllowed = 'move';
                               }}
                               className={`session-card ${session.kind === 'lab' ? 'lab' : ''} ${hasConflict ? 'conflict' : ''} ${continued ? 'continued' : ''}`}
-                              title={continued ? 'Continues from the slot above' : 'Drag to move · double-click to lock or unlock'}
-                              onDoubleClick={() => onSessionUpdate(session.id, { locked: !session.locked })}
+                              title={
+                                continued
+                                  ? 'Continues from the slot above'
+                                  : canEditSessions
+                                    ? 'Drag to move · double-click to lock or unlock'
+                                    : undefined
+                              }
+                              onDoubleClick={() => canEditSessions && onSessionUpdate(session.id, { locked: !session.locked })}
                             >
                               {hasConflict && <div className="conflict-badge">!</div>}
                               <strong>
@@ -381,7 +402,7 @@ export function TimetablePreview({
         </div>
       )}
 
-      {visible.length > 0 && (
+      {canEditSessions && visible.length > 0 && (
         <div className="editor no-print">
           <button type="button" className="link-button" onClick={() => setShowEditor(!showEditor)}>
             {showEditor ? 'Hide session list' : `Edit sessions as a list (${visible.length})`}

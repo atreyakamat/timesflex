@@ -6,31 +6,94 @@ import { nanoid } from 'nanoid';
 
 const { Pool } = pg;
 
-const schema = `
-CREATE TABLE IF NOT EXISTS institutions (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL,
-  data JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+// Ordered, append-only. Each entry runs once, inside a transaction, and is
+// recorded in schema_migrations. Never edit a shipped migration; add a new one.
+export const MIGRATIONS = [
+  {
+    version: 1,
+    name: 'institutions and timetables',
+    sql: `
+      CREATE TABLE IF NOT EXISTS institutions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS timetables (
+        id TEXT PRIMARY KEY,
+        institution_id TEXT NOT NULL,
+        label TEXT,
+        status TEXT NOT NULL,
+        request JSONB NOT NULL,
+        generated_sessions JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT fk_institution FOREIGN KEY (institution_id) REFERENCES institutions (id)
+      );`,
+  },
+  {
+    version: 2,
+    name: 'solve report and institution index',
+    sql: `
+      ALTER TABLE timetables ADD COLUMN IF NOT EXISTS report JSONB;
+      CREATE INDEX IF NOT EXISTS timetables_institution_idx ON timetables (institution_id);`,
+  },
+  {
+    version: 3,
+    name: 'users and sessions',
+    sql: `
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        disabled BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX sessions_user_idx ON sessions (user_id);`,
+  },
+];
 
-CREATE TABLE IF NOT EXISTS timetables (
-  id TEXT PRIMARY KEY,
-  institution_id TEXT NOT NULL,
-  label TEXT,
-  status TEXT NOT NULL,
-  request JSONB NOT NULL,
-  generated_sessions JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT fk_institution FOREIGN KEY (institution_id) REFERENCES institutions (id)
-);
-
-ALTER TABLE timetables ADD COLUMN IF NOT EXISTS report JSONB;
-CREATE INDEX IF NOT EXISTS timetables_institution_idx ON timetables (institution_id);
-`;
+export const migrate = async (pool) => {
+  const client = await pool.connect();
+  try {
+    // One API instance migrates at a time.
+    await client.query('SELECT pg_advisory_lock(727274)');
+    await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    const applied = new Set((await client.query('SELECT version FROM schema_migrations')).rows.map((row) => row.version));
+    for (const migration of MIGRATIONS) {
+      if (applied.has(migration.version)) continue;
+      await client.query('BEGIN');
+      try {
+        await client.query(migration.sql);
+        await client.query('INSERT INTO schema_migrations (version, name) VALUES ($1, $2)', [
+          migration.version,
+          migration.name,
+        ]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw new Error(`Migration ${migration.version} (${migration.name}) failed: ${error.message}`);
+      }
+    }
+  } finally {
+    await client.query('SELECT pg_advisory_unlock(727274)').catch(() => {});
+    client.release();
+  }
+};
 
 const toInstitution = (row) => ({
   id: row.id,
@@ -53,18 +116,25 @@ const toTimetable = (row) => ({
   updatedAt: row.updated_at,
 });
 
+const toUser = (row) => ({
+  id: row.id,
+  username: row.username,
+  passwordHash: row.password_hash,
+  role: row.role,
+  disabled: row.disabled,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const toSession = (row) => ({ id: row.id, userId: row.user_id, expiresAt: row.expires_at });
+
 /**
  * Both stores expose the same async interface, so the API does not care
  * whether it runs against PostgreSQL or the zero-setup local JSON file.
  */
 export const createPgStore = async (connectionString) => {
   const pool = new Pool({ connectionString });
-  const client = await pool.connect();
-  try {
-    await client.query(schema);
-  } finally {
-    client.release();
-  }
+  await migrate(pool);
 
   const getTimetable = async (id) => {
     const result = await pool.query('SELECT * FROM timetables WHERE id = $1', [id]);
@@ -128,6 +198,53 @@ export const createPgStore = async (connectionString) => {
       );
       return result.rows.map(toTimetable);
     },
+    async countUsers() {
+      return Number((await pool.query('SELECT COUNT(*) AS n FROM users')).rows[0].n);
+    },
+    async listUsers() {
+      return (await pool.query('SELECT * FROM users ORDER BY created_at')).rows.map(toUser);
+    },
+    async getUser(id) {
+      const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+      return result.rows[0] ? toUser(result.rows[0]) : null;
+    },
+    async getUserByUsername(username) {
+      const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+      return result.rows[0] ? toUser(result.rows[0]) : null;
+    },
+    async createUser({ username, passwordHash, role }) {
+      const result = await pool.query(
+        'INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING *',
+        [nanoid(), username, passwordHash, role],
+      );
+      return toUser(result.rows[0]);
+    },
+    async updateUser(id, { role, disabled, passwordHash }) {
+      const result = await pool.query(
+        `UPDATE users SET role = COALESCE($2, role), disabled = COALESCE($3, disabled),
+           password_hash = COALESCE($4, password_hash), updated_at = NOW()
+         WHERE id = $1 RETURNING *`,
+        [id, role ?? null, disabled ?? null, passwordHash ?? null],
+      );
+      return result.rows[0] ? toUser(result.rows[0]) : null;
+    },
+    async deleteUser(id) {
+      return (await pool.query('DELETE FROM users WHERE id = $1', [id])).rowCount > 0;
+    },
+    async createSession({ id, userId, expiresAt }) {
+      await pool.query('DELETE FROM sessions WHERE expires_at < NOW()');
+      await pool.query('INSERT INTO sessions (id, user_id, expires_at) VALUES ($1, $2, $3)', [id, userId, expiresAt]);
+    },
+    async getSession(id) {
+      const result = await pool.query('SELECT * FROM sessions WHERE id = $1', [id]);
+      return result.rows[0] ? toSession(result.rows[0]) : null;
+    },
+    async deleteSession(id) {
+      await pool.query('DELETE FROM sessions WHERE id = $1', [id]);
+    },
+    async deleteUserSessions(userId, { except } = {}) {
+      await pool.query('DELETE FROM sessions WHERE user_id = $1 AND id <> COALESCE($2, \'\')', [userId, except ?? null]);
+    },
     getTimetable,
     // Only the fields passed are changed.
     async updateTimetable(id, { generatedSessions, status, report }) {
@@ -151,13 +268,11 @@ export const createPgStore = async (connectionString) => {
 };
 
 export const createFileStore = async (filePath) => {
-  let state = { institutions: [], timetables: [] };
+  const collections = ['institutions', 'timetables', 'users', 'sessions'];
+  let state = Object.fromEntries(collections.map((key) => [key, []]));
   try {
     const loaded = JSON.parse(await fs.readFile(filePath, 'utf8'));
-    state = {
-      institutions: Array.isArray(loaded?.institutions) ? loaded.institutions : [],
-      timetables: Array.isArray(loaded?.timetables) ? loaded.timetables : [],
-    };
+    state = Object.fromEntries(collections.map((key) => [key, Array.isArray(loaded?.[key]) ? loaded[key] : []]));
   } catch (error) {
     if (error.code !== 'ENOENT') {
       throw new Error(`Cannot read data file ${filePath}: ${error.message}. Fix or move it, then restart.`);
@@ -246,6 +361,67 @@ export const createFileStore = async (filePath) => {
           .filter((item) => item.institutionId === institutionId)
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       );
+    },
+    async countUsers() {
+      return state.users.length;
+    },
+    async listUsers() {
+      return clone([...state.users].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+    },
+    async getUser(id) {
+      return clone(state.users.find((item) => item.id === id));
+    },
+    async getUserByUsername(username) {
+      return clone(state.users.find((item) => item.username === username));
+    },
+    async createUser({ username, passwordHash, role }) {
+      if (state.users.some((item) => item.username === username)) {
+        throw Object.assign(new Error('duplicate username'), { code: '23505' });
+      }
+      const record = { id: nanoid(), username, passwordHash, role, disabled: false, createdAt: now(), updatedAt: now() };
+      await mutate(() => state.users.push(record));
+      return clone(record);
+    },
+    async updateUser(id, { role, disabled, passwordHash }) {
+      if (!state.users.some((item) => item.id === id)) return null;
+      return clone(
+        await mutate(() => {
+          const record = state.users.find((item) => item.id === id);
+          if (role !== undefined) record.role = role;
+          if (disabled !== undefined) record.disabled = disabled;
+          if (passwordHash !== undefined) record.passwordHash = passwordHash;
+          record.updatedAt = now();
+          return record;
+        }),
+      );
+    },
+    async deleteUser(id) {
+      if (!state.users.some((item) => item.id === id)) return false;
+      await mutate(() => {
+        state.users = state.users.filter((item) => item.id !== id);
+        state.sessions = state.sessions.filter((item) => item.userId !== id);
+      });
+      return true;
+    },
+    async createSession({ id, userId, expiresAt }) {
+      const current = new Date().toISOString();
+      await mutate(() => {
+        state.sessions = state.sessions.filter((item) => item.expiresAt > current);
+        state.sessions.push({ id, userId, expiresAt });
+      });
+    },
+    async getSession(id) {
+      return clone(state.sessions.find((item) => item.id === id));
+    },
+    async deleteSession(id) {
+      await mutate(() => {
+        state.sessions = state.sessions.filter((item) => item.id !== id);
+      });
+    },
+    async deleteUserSessions(userId, { except } = {}) {
+      await mutate(() => {
+        state.sessions = state.sessions.filter((item) => item.userId !== userId || item.id === except);
+      });
     },
     async getTimetable(id) {
       return clone(state.timetables.find((item) => item.id === id));
