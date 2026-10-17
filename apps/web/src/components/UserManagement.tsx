@@ -1,8 +1,27 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { changePassword, createUser, deleteUser, listUsers, updateUser } from '../api';
+import { changePassword, createUser, deleteUser, listAudit, listUsers, updateUser, type AuditEntry } from '../api';
 import type { AuthUser, UserRole } from '../types';
 
 const roleLabel: Record<UserRole, string> = { admin: 'Admin', viewer: 'Viewer' };
+
+const actionLabel: Record<string, string> = {
+  'auth.setup': 'created the owner account',
+  'auth.login': 'signed in',
+  'auth.login_failed': 'failed to sign in',
+  'auth.logout': 'signed out',
+  'auth.password_changed': 'changed their password',
+  'user.created': 'added user',
+  'user.updated': 'changed user',
+  'user.deleted': 'deleted user',
+  'institution.created': 'created',
+  'institution.updated': 'saved',
+  'institution.deleted': 'deleted',
+  'timetable.created': 'started',
+  'timetable.solved': 'generated',
+  'timetable.edited': 'edited',
+  'timetable.approved': 'approved',
+  'timetable.unapproved': 'unapproved',
+};
 
 interface UserManagementProps {
   currentUser: AuthUser;
@@ -13,6 +32,7 @@ interface UserManagementProps {
 export function UserManagement({ currentUser, onClose }: UserManagementProps) {
   const isAdmin = currentUser.role === 'admin';
   const [users, setUsers] = useState<AuthUser[]>([]);
+  const [activity, setActivity] = useState<AuditEntry[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -21,6 +41,9 @@ export function UserManagement({ currentUser, onClose }: UserManagementProps) {
     listUsers()
       .then(setUsers)
       .catch((err) => setError(err instanceof Error ? err.message : 'Could not load users.'));
+    listAudit()
+      .then(setActivity)
+      .catch(() => setActivity([]));
   };
 
   useEffect(refresh, [isAdmin]);
@@ -135,6 +158,23 @@ export function UserManagement({ currentUser, onClose }: UserManagementProps) {
       )}
 
       <ChangePasswordForm onChange={(current, next) => run(() => changePassword(current, next), 'Password changed.')} />
+
+      {isAdmin && activity.length > 0 && (
+        <>
+          <h3>Recent activity</h3>
+          <ul className="activity">
+            {activity.map((entry) => (
+              <li key={entry.id}>
+                <time dateTime={entry.at}>{new Date(entry.at).toLocaleString()}</time>
+                <span>
+                  <strong>{entry.username ?? 'someone'}</strong> {actionLabel[entry.action] ?? entry.action}
+                  {entry.target ? ` ${entry.target}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </section>
   );
 }

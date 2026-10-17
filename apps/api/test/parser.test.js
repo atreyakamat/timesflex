@@ -206,3 +206,14 @@ test('reads division sizes from the sentence that names the division', () => {
     ],
   );
 });
+
+test('rule parser does not turn rules into rooms, teachers or divisions', () => {
+  const text = `Divisions SE-A (batches A1, A2) and SE-B (batches B1, B2).
+Prof. Mehta teaches DBMS 4 times a week in Room 101, max 3 lectures a day, not available on Friday.
+Each teacher can take max 3 lectures a day.`;
+  const { draft } = normalizeDraft(groundRaw(mergeAssignments(ruleParse(text), text), text), text);
+  assert.ok(draft.teachers.every((t) => !/max|lectures/.test(t.name)), JSON.stringify(draft.teachers));
+  assert.ok(draft.rooms.every((r) => !/max|available/.test(r.name)), JSON.stringify(draft.rooms));
+  assert.ok(draft.divisions.every((d) => !/[()]/.test(d.name)), JSON.stringify(draft.divisions));
+  assert.deepEqual(draft.divisions.map((d) => d.name).sort(), ['SE-A', 'SE-B']);
+});

@@ -7,6 +7,11 @@
  *   using `response_format: { type: "json_schema" }`.
  * - provider "off": skip the model and use the rule-based parser only.
  */
+const positiveNumber = (value, fallback) => {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+};
+
 export const aiConfig = () => {
   const provider = (process.env.AI_PROVIDER ?? 'ollama').toLowerCase();
   const defaults = {
@@ -18,8 +23,8 @@ export const aiConfig = () => {
     baseUrl: (process.env.AI_BASE_URL ?? defaults[provider] ?? '').replace(/\/$/, ''),
     model: process.env.AI_MODEL ?? 'qwen3:0.6b',
     apiKey: process.env.AI_API_KEY ?? 'local',
-    timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 120000),
-    numCtx: Number(process.env.AI_NUM_CTX ?? 4096),
+    timeoutMs: positiveNumber(process.env.AI_TIMEOUT_MS, 120000),
+    numCtx: positiveNumber(process.env.AI_NUM_CTX, 4096),
   };
 };
 

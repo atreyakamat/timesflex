@@ -291,21 +291,36 @@ const splitNames = (block) =>
     .map((value) => clean(value.replace(/^(?:called|named|are|is|:)\s*/i, '')))
     .filter(Boolean);
 
+// Words that mark a phrase as a rule ("max 3 lectures a day") rather than a name.
+const NOT_A_NAME =
+  /\b(?:max(?:imum)?|min(?:imum)?|can(?:not|'t)?|not|available|unavailable|lectures?|periods?|per|each|every|day|days|week|take|takes|must|should|only|no|teaches?|taught)\b/i;
+const looksLikeName = (value) =>
+  value.split(/\s+/).length <= 5 && !NOT_A_NAME.test(value) && !/[()]/.test(value);
+
 export const ruleParse = (text) => {
   const sentences = text.split(/(?<=[.!?])\s+|\n+/);
   const raw = { institution: { workingDays: [] }, divisions: [], teachers: [], rooms: [], subjects: [] };
-  const grab = (pattern) => {
+  // Only plural list phrasing ("teachers Alice, Bob") is read here; a singular
+  // mention ("in Room 101, max 3 lectures") is a detail of another sentence.
+  const grab = (pattern, { dropParentheses = false } = {}) => {
     for (const sentence of sentences) {
       const match = sentence.match(pattern);
-      if (match) return splitNames(match[1].replace(/[.!?]$/, ''));
+      if (!match) continue;
+      let block = match[1].replace(/[.!?]$/, '');
+      if (dropParentheses) block = block.replace(/\([^)]*\)/g, '');
+      return splitNames(block);
     }
     return [];
   };
 
-  for (const name of grab(/\bteachers?\s+([^.]+)/i)) raw.teachers.push({ name });
-  for (const name of grab(/\brooms?\s+([^.]+)/i)) raw.rooms.push({ name, type: /lab/i.test(name) ? 'lab' : 'classroom' });
-  for (const name of grab(/\bdivisions?\s+([^.]+)/i)) raw.divisions.push({ name, batches: [] });
-  for (const part of grab(/\bsubjects?\s+([^.]+)/i)) {
+  for (const name of grab(/\bteachers\s+([^.]+)/i).filter(looksLikeName)) raw.teachers.push({ name });
+  for (const name of grab(/\brooms\s+([^.]+)/i).filter(looksLikeName)) {
+    raw.rooms.push({ name, type: /lab/i.test(name) ? 'lab' : 'classroom' });
+  }
+  for (const name of grab(/\bdivisions\s+([^.]+)/i, { dropParentheses: true }).filter(looksLikeName)) {
+    raw.divisions.push({ name, batches: [] });
+  }
+  for (const part of grab(/\bsubjects\s+([^.]+)/i)) {
     const slots = part.match(/(\d+)\s*slots?/i);
     const perWeek = part.match(/(\d+)\s*(?:times|sessions|lectures)/i);
     raw.subjects.push({

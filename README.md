@@ -29,6 +29,8 @@ The first time you open the app it asks you to create the **owner** account. Tim
 | Viewer | Browse timetables and export them as Excel or PDF |
 
 Admins add viewer accounts for staff under **Users**. Approved timetables are locked until an admin unapproves them.
+Sign-ins, user changes, saves, generations and approvals are written to an audit log that admins see as
+**Recent activity** on the Users page.
 If you lose the admin password, reset it from the server:
 
 ```bash
@@ -42,7 +44,6 @@ http://localhost:3001.
 - `apps/web`: React frontend for setup, generation, and editing
 - `apps/api`: Node.js API for institutions, timetable versions, chat parsing, and solver orchestration
 - `services/solver`: Python scheduling engine using OR-Tools CP-SAT
-- `packages/shared`: Shared types and schemas
 - `docs`: Product, stack, design, and roadmap docs
 - `scripts`: `setup`, `dev` and test runners (no extra dependencies)
 
@@ -134,6 +135,9 @@ scored 80%, so expect occasional misses on unfamiliar phrasing. That is why ever
 | `COOKIE_SECURE` | `false` | set `true` when the app is served over HTTPS |
 | `CORS_ORIGINS` | unset | comma-separated extra origins; same-origin needs none |
 | `WEB_DIST` | `apps/web/dist` | built web app the API serves |
+| `LOG_REQUESTS` | `true` | one line per API request on stdout; `false` silences it |
+
+Put these in a `.env` file at the repo root (copy `.env.example`); the API and the admin CLI load it on start.
 
 ## Tests
 ```bash

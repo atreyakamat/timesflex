@@ -3,7 +3,6 @@
   "private": true,
   "workspaces": [
     "apps/*",
-    "packages/*",
     "services/*"
   ],
   "scripts": {

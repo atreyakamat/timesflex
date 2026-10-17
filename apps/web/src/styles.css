@@ -1009,3 +1009,33 @@ button:disabled {
   border-color: #cbd5e1;
   background: #fff;
 }
+
+.activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.activity li {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.activity time {
+  color: #64748b;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  min-width: 170px;
+}
+
+.card.clickable:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 3px solid #0ea5e9;
+  outline-offset: 2px;
+}

@@ -85,7 +85,20 @@ export function Dashboard({ user, canEdit, onLoadInstitution, onNewInstitution, 
       ) : (
         <div className="institution-grid">
           {institutions.map((inst) => (
-            <div key={inst.id} className="card clickable" onClick={() => onLoadInstitution(inst)}>
+            <div
+              key={inst.id}
+              className="card clickable"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${inst.name}`}
+              onClick={() => onLoadInstitution(inst)}
+              onKeyDown={(event) => {
+                if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                  event.preventDefault();
+                  onLoadInstitution(inst);
+                }
+              }}
+            >
               <div className="card-badge">{inst.type}</div>
               {canEdit && (
                 <button

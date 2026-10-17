@@ -22,6 +22,7 @@ import {
   verifyPassword,
 } from './auth.js';
 import { HttpError } from './errors.js';
+import { validateInstitutionFields, validateProfile, validateTimetableRequest } from './validation.js';
 
 const STATUSES = ['draft', 'generated', 'partial', 'edited', 'approved'];
 const APPROVABLE = ['generated', 'partial', 'edited'];
@@ -30,7 +31,7 @@ const APPROVABLE = ['generated', 'partial', 'edited'];
  * Builds the Express app around injected dependencies so tests can run it
  * against an in-memory store and a fake solver.
  */
-export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, allowedOrigins = [] }) => {
+export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, allowedOrigins = [], log }) => {
   const app = express();
   app.disable('x-powered-by');
   // Same-origin by default (the API serves the web app, or Vite proxies to it).
@@ -40,6 +41,29 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
   app.use(loadUser(store));
   const limiter = createLoginLimiter();
   const admin = requireRole('admin');
+
+  // One line per API request: when, who, what, result, how long.
+  if (log) {
+    app.use('/api', (request, response, next) => {
+      const started = Date.now();
+      response.on('finish', () => {
+        log(
+          `${new Date().toISOString()} ${request.method} ${request.originalUrl} ${response.statusCode} ` +
+            `${Date.now() - started}ms ${request.user?.username ?? '-'}`,
+        );
+      });
+      next();
+    });
+  }
+
+  // Who changed what. Best effort: a failed audit write is logged, never fails the request.
+  const audit = async (request, action, target, detail) => {
+    try {
+      await store.addAudit({ username: request.user?.username ?? detail?.username ?? null, action, target, detail });
+    } catch (error) {
+      console.error('Audit write failed:', error.message);
+    }
+  };
 
   // Wrap async handlers so every failure becomes a JSON error instead of a hung request.
   const route = (handler) => async (request, response, next) => {
@@ -78,6 +102,8 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     if ((await store.countUsers()) > 0) throw new HttpError(409, 'Setup is already done. Sign in instead.');
     const user = await store.createUser({ username, passwordHash: await hashPassword(password), role: 'admin' });
     await startSession(response, user);
+    request.user = user;
+    await audit(request, 'auth.setup', username);
     response.status(201).json({ user: publicUser(user) });
   }));
 
@@ -89,15 +115,21 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     const valid = user && !user.disabled && (await verifyPassword(password, user.passwordHash));
     if (!valid) {
       limiter.fail(username, request.ip);
+      await audit(request, 'auth.login_failed', username || null, { username, ip: request.ip });
       throw new HttpError(401, 'Wrong username or password.');
     }
     limiter.succeed(username);
     await startSession(response, user);
+    request.user = user;
+    await audit(request, 'auth.login', username);
     response.json({ user: publicUser(user) });
   }));
 
   app.post('/api/auth/logout', route(async (request, response) => {
-    if (request.sessionHash) await store.deleteSession(request.sessionHash);
+    if (request.sessionHash) {
+      await store.deleteSession(request.sessionHash);
+      await audit(request, 'auth.logout', request.user?.username);
+    }
     response.clearCookie(SESSION_COOKIE, { ...cookieOptions(), maxAge: undefined });
     response.json({ success: true });
   }));
@@ -110,6 +142,7 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     await store.updateUser(request.user.id, { passwordHash: await hashPassword(validatePassword(newPassword)) });
     // Sign out every other device.
     await store.deleteUserSessions(request.user.id, { except: request.sessionHash });
+    await audit(request, 'auth.password_changed', request.user.username);
     response.json({ success: true });
   }));
 
@@ -127,6 +160,7 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     const role = validateRole(request.body?.role ?? 'viewer');
     if (await store.getUserByUsername(username)) throw new HttpError(409, 'That username is taken.');
     const user = await store.createUser({ username, passwordHash: await hashPassword(password), role });
+    await audit(request, 'user.created', username, { role });
     response.status(201).json(publicUser(user));
   }));
 
@@ -146,6 +180,11 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     }
     const updated = await store.updateUser(target.id, changes);
     if (changes.disabled || changes.passwordHash) await store.deleteUserSessions(target.id);
+    await audit(request, 'user.updated', target.username, {
+      ...(changes.role ? { role: changes.role } : {}),
+      ...(changes.disabled !== undefined ? { disabled: changes.disabled } : {}),
+      ...(changes.passwordHash ? { passwordReset: true } : {}),
+    });
     response.json(publicUser(updated));
   }));
 
@@ -157,7 +196,13 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
       throw new HttpError(409, 'There must always be at least one active admin.');
     }
     await store.deleteUser(target.id);
+    await audit(request, 'user.deleted', target.username);
     response.json({ success: true });
+  }));
+
+  app.get('/api/audit', admin, route(async (request, response) => {
+    const limit = Math.min(500, Math.max(1, Number(request.query.limit) || 100));
+    response.json(await store.listAudit({ limit }));
   }));
 
   app.get('/api/ai/status', route(async (request, response) => {
@@ -170,8 +215,11 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
 
   app.post('/api/institutions', admin, route(async (request, response) => {
     const { name, type, profile, data } = request.body ?? {};
-    if (!name || !type) throw new HttpError(400, 'name and type are required');
-    response.status(201).json(await store.createInstitution({ name, type, data: profile ?? data ?? {} }));
+    validateInstitutionFields({ name, type });
+    validateProfile(profile ?? data);
+    const created = await store.createInstitution({ name, type, data: profile ?? data ?? {} });
+    await audit(request, 'institution.created', name, { id: created.id });
+    response.status(201).json(created);
   }));
 
   app.get('/api/institutions/:id', route(async (request, response) => {
@@ -182,17 +230,21 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
 
   app.put('/api/institutions/:id', admin, route(async (request, response) => {
     const { name, type, profile, data } = request.body ?? {};
-    if (!name || !type) throw new HttpError(400, 'name and type are required');
+    validateInstitutionFields({ name, type });
+    validateProfile(profile ?? data);
     const existing = await store.getInstitution(request.params.id);
     if (!existing) throw notFound('Institution');
     // GET returns the profile as `data`; accept either name, and never wipe it when omitted.
     const nextData = profile ?? data ?? existing.data;
-    response.json(await store.updateInstitution(existing.id, { name, type, data: nextData }));
+    const updated = await store.updateInstitution(existing.id, { name, type, data: nextData });
+    await audit(request, 'institution.updated', name, { id: existing.id });
+    response.json(updated);
   }));
 
   app.delete('/api/institutions/:id', admin, route(async (request, response) => {
-    const success = await store.deleteInstitution(request.params.id);
-    if (!success) throw notFound('Institution');
+    const existing = await store.getInstitution(request.params.id);
+    if (!existing || !(await store.deleteInstitution(existing.id))) throw notFound('Institution');
+    await audit(request, 'institution.deleted', existing.name, { id: existing.id });
     response.json({ success: true });
   }));
 
@@ -201,15 +253,14 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     if (!institution) throw notFound('Institution');
 
     const { label, request: timetableRequest } = request.body ?? {};
-    if (!timetableRequest?.days || !timetableRequest?.slots || !timetableRequest?.sessions) {
-      throw new HttpError(400, 'request.days, request.slots, and request.sessions are required');
-    }
+    validateTimetableRequest(timetableRequest);
     const timetable = await store.createTimetable({
       institutionId: institution.id,
       label: label ?? 'Initial version',
       status: 'draft',
       request: timetableRequest,
     });
+    await audit(request, 'timetable.created', `${institution.name} · ${timetable.label}`, { id: timetable.id });
     response.status(201).json(timetable);
   }));
 
@@ -225,10 +276,18 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     response.json(timetable);
   }));
 
+  // A small local model handles one request at a time; queueing more only makes everyone wait.
+  let parsing = false;
   app.post('/api/parse', admin, route(async (request, response) => {
     const { text, context } = request.body ?? {};
     if (!text || !String(text).trim()) throw new HttpError(400, 'text is required');
-    response.json(await parse(String(text), context ?? {}));
+    if (parsing) throw new HttpError(429, 'The local AI is still working on another request. Try again shortly.');
+    parsing = true;
+    try {
+      response.json(await parse(String(text), context ?? {}));
+    } finally {
+      parsing = false;
+    }
   }));
 
   app.post('/api/timetables/:id/solve', admin, route(async (request, response) => {
@@ -247,6 +306,7 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
     // A solve that placed nothing must never replace sessions that already exist.
     if (scheduled.length === 0 && (timetable.generatedSessions ?? []).length > 0) {
       const kept = await store.updateTimetable(timetable.id, { report });
+      await audit(request, 'timetable.solved', timetable.label, { id: timetable.id, applied: false, placed: 0 });
       response.json({ timetable: kept, solver: solverResult, applied: false });
       return;
     }
@@ -254,6 +314,11 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
       generatedSessions: scheduled,
       status: solverResult.status === 'ok' ? 'generated' : 'partial',
       report,
+    });
+    await audit(request, 'timetable.solved', timetable.label, {
+      id: timetable.id,
+      placed: scheduled.length,
+      unplaced: report.unscheduledSessions.length,
     });
     response.json({ timetable: updated, solver: solverResult, applied: true });
   }));
@@ -293,9 +358,15 @@ export const createApp = ({ store, solve, parse, aiConfig, aiStatus, webDist, al
       }
       if (sessions.length === 0) throw new HttpError(409, 'An empty timetable cannot be approved.');
     }
-    response.json(
-      await store.updateTimetable(existing.id, { generatedSessions: sessions, status: status ?? 'edited', report }),
-    );
+    const saved = await store.updateTimetable(existing.id, { generatedSessions: sessions, status: status ?? 'edited', report });
+    const action =
+      status === 'approved' && existing.status !== 'approved'
+        ? 'timetable.approved'
+        : existing.status === 'approved' && status !== 'approved'
+          ? 'timetable.unapproved'
+          : 'timetable.edited';
+    await audit(request, action, existing.label, { id: existing.id, sessions: sessions.length });
+    response.json(saved);
   }));
 
   app.use('/api', (request, response) => {

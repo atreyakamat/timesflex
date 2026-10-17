@@ -61,7 +61,23 @@ export const MIGRATIONS = [
       );
       CREATE INDEX sessions_user_idx ON sessions (user_id);`,
   },
+  {
+    version: 4,
+    name: 'audit log',
+    sql: `
+      CREATE TABLE audit_log (
+        id BIGSERIAL PRIMARY KEY,
+        at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        username TEXT,
+        action TEXT NOT NULL,
+        target TEXT,
+        detail JSONB
+      );
+      CREATE INDEX audit_log_at_idx ON audit_log (at DESC);`,
+  },
 ];
+
+const AUDIT_FILE_LIMIT = 2000;
 
 export const migrate = async (pool) => {
   const client = await pool.connect();
@@ -124,6 +140,15 @@ const toUser = (row) => ({
   disabled: row.disabled,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+});
+
+const toAudit = (row) => ({
+  id: String(row.id),
+  at: row.at,
+  username: row.username,
+  action: row.action,
+  target: row.target,
+  detail: row.detail ?? null,
 });
 
 const toSession = (row) => ({ id: row.id, userId: row.user_id, expiresAt: row.expires_at });
@@ -245,6 +270,18 @@ export const createPgStore = async (connectionString) => {
     async deleteUserSessions(userId, { except } = {}) {
       await pool.query('DELETE FROM sessions WHERE user_id = $1 AND id <> COALESCE($2, \'\')', [userId, except ?? null]);
     },
+    async addAudit({ username, action, target, detail }) {
+      await pool.query('INSERT INTO audit_log (username, action, target, detail) VALUES ($1, $2, $3, $4)', [
+        username ?? null,
+        action,
+        target ?? null,
+        detail === undefined ? null : JSON.stringify(detail),
+      ]);
+    },
+    async listAudit({ limit = 100 } = {}) {
+      const result = await pool.query('SELECT * FROM audit_log ORDER BY at DESC, id DESC LIMIT $1', [limit]);
+      return result.rows.map(toAudit);
+    },
     getTimetable,
     // Only the fields passed are changed.
     async updateTimetable(id, { generatedSessions, status, report }) {
@@ -268,7 +305,7 @@ export const createPgStore = async (connectionString) => {
 };
 
 export const createFileStore = async (filePath) => {
-  const collections = ['institutions', 'timetables', 'users', 'sessions'];
+  const collections = ['institutions', 'timetables', 'users', 'sessions', 'audit'];
   let state = Object.fromEntries(collections.map((key) => [key, []]));
   try {
     const loaded = JSON.parse(await fs.readFile(filePath, 'utf8'));
@@ -422,6 +459,16 @@ export const createFileStore = async (filePath) => {
       await mutate(() => {
         state.sessions = state.sessions.filter((item) => item.userId !== userId || item.id === except);
       });
+    },
+    async addAudit({ username, action, target, detail }) {
+      const entry = { id: nanoid(), at: now(), username: username ?? null, action, target: target ?? null, detail: detail ?? null };
+      await mutate(() => {
+        state.audit.push(entry);
+        if (state.audit.length > AUDIT_FILE_LIMIT) state.audit = state.audit.slice(-AUDIT_FILE_LIMIT);
+      });
+    },
+    async listAudit({ limit = 100 } = {}) {
+      return clone(state.audit.slice(-limit).reverse());
     },
     async getTimetable(id) {
       return clone(state.timetables.find((item) => item.id === id));

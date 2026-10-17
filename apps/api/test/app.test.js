@@ -275,3 +275,65 @@ test('saving edits can update the unplaced-session report', async (t) => {
   assert.deepEqual(saved.body.report, report);
   assert.equal((await call('PUT', url, { generatedSessions: [SESSION], report: { nope: 1 } })).status, 400);
 });
+
+test('the audit log records who did what, and only admins can read it', async (t) => {
+  const { call, client } = await start(t);
+  await createGenerated(call);
+  await call('POST', '/api/users', { username: 'staff', password: 'staff-pass-1' });
+  await client()('POST', '/api/auth/login', { username: 'staff', password: 'wrong-one' });
+
+  const entries = (await call('GET', '/api/audit')).body;
+  const actions = entries.map((entry) => entry.action);
+  for (const action of ['auth.setup', 'institution.created', 'timetable.created', 'timetable.solved', 'user.created', 'auth.login_failed']) {
+    assert.ok(actions.includes(action), `missing ${action} in ${actions}`);
+  }
+  assert.equal(entries.find((entry) => entry.action === 'institution.created').username, 'owner');
+  assert.equal(entries[0].action, 'auth.login_failed');
+
+  const viewer = client();
+  await viewer('POST', '/api/auth/login', { username: 'staff', password: 'staff-pass-1' });
+  assert.equal((await viewer('GET', '/api/audit')).status, 403);
+});
+
+test('only one AI parse runs at a time', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'timesflex-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  let release;
+  const app = createApp({
+    store: await createFileStore(path.join(dir, 'data.json')),
+    solve: okSolve,
+    parse: () => new Promise((resolve) => { release = () => resolve({ draft: {} }); }),
+    aiConfig: () => ({ provider: 'off' }),
+    aiStatus: async () => ({}),
+  });
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const setup = await fetch(`${base}/api/auth/setup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'owner', password: 'owner-pass-1' }),
+  });
+  const headers = { 'Content-Type': 'application/json', Cookie: setup.headers.get('set-cookie').split(';')[0] };
+  const body = JSON.stringify({ text: 'hello' });
+  const first = fetch(`${base}/api/parse`, { method: 'POST', headers, body });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const second = await fetch(`${base}/api/parse`, { method: 'POST', headers, body });
+  assert.equal(second.status, 429);
+  release();
+  assert.equal((await first).status, 200);
+});
+
+test('bad institution and timetable data is rejected with a clear message', async (t) => {
+  const { call } = await start(t);
+  assert.equal((await call('POST', '/api/institutions', { name: 'X', type: 'spaceship' })).status, 400);
+  assert.equal((await call('POST', '/api/institutions', { name: 'X', type: 'college', profile: { teachers: 'nope' } })).status, 400);
+  const institution = (await call('POST', '/api/institutions', { name: 'X', type: 'college' })).body;
+  const url = `/api/institutions/${institution.id}/timetables`;
+  const duplicate = await call('POST', url, { request: { ...REQUEST, sessions: [REQUEST.sessions[0], REQUEST.sessions[0]] } });
+  assert.equal(duplicate.status, 400);
+  assert.match(duplicate.body.error, /duplicate/);
+  const missing = await call('POST', url, { request: { ...REQUEST, sessions: [{ id: 'x' }] } });
+  assert.match(missing.body.error, /subject_id is required/);
+  assert.equal((await call('POST', url, { request: { ...REQUEST, days: ['Monday', 'Monday'] } })).status, 400);
+});

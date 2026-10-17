@@ -164,3 +164,14 @@ export const updateUser = async (
 export const deleteUser = async (id: string): Promise<void> => {
   await requestJson(`/api/users/${id}`, { method: 'DELETE' });
 };
+
+export interface AuditEntry {
+  id: string;
+  at: string;
+  username: string | null;
+  action: string;
+  target: string | null;
+  detail: Record<string, unknown> | null;
+}
+
+export const listAudit = async (limit = 50): Promise<AuditEntry[]> => requestJson(`/api/audit?limit=${limit}`);

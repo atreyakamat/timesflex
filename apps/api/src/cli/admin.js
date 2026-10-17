@@ -1,6 +1,7 @@
 // Create an admin, or reset a user's password and re-enable them as admin.
 // Usage: npm run admin -w @timesflex/api -- <username>
 // The password is read from the TIMESFLEX_PASSWORD env var, or prompted for.
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,8 @@ import { hashPassword, validatePassword, validateUsername } from '../auth.js';
 import { createStore } from '../db.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const envFile = path.resolve(here, '../../../../.env');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const askPassword = async () => {
   if (process.env.TIMESFLEX_PASSWORD) return process.env.TIMESFLEX_PASSWORD;

@@ -15,7 +15,7 @@ const factories = {
   },
   postgres: async (t) => {
     const store = await createPgStore(process.env.TEST_DATABASE_URL);
-    await store.pool.query('TRUNCATE timetables, institutions');
+    await store.pool.query('TRUNCATE timetables, institutions, audit_log, sessions, users');
     t.after(() => store.pool.end());
     return store;
   },
@@ -42,6 +42,30 @@ for (const [kind, make] of Object.entries(factories)) {
     const emptied = await store.updateTimetable(timetable.id, { generatedSessions: [] });
     assert.deepEqual(emptied.generatedSessions, []);
     assert.equal(await store.updateTimetable('missing', { status: 'edited' }), null);
+  });
+
+  test(`${kind} store: audit entries come back newest first`, { skip }, async (t) => {
+    const store = await make(t);
+    await store.addAudit({ username: 'owner', action: 'a.first', target: 'x' });
+    await store.addAudit({ username: 'owner', action: 'a.second', target: 'y', detail: { n: 1 } });
+    const entries = await store.listAudit({ limit: 10 });
+    assert.deepEqual(entries.map((entry) => entry.action), ['a.second', 'a.first']);
+    assert.deepEqual(entries[0].detail, { n: 1 });
+  });
+
+  test(`${kind} store: users and sessions`, { skip }, async (t) => {
+    const store = await make(t);
+    const user = await store.createUser({ username: 'owner', passwordHash: 'h', role: 'admin' });
+    assert.equal(await store.countUsers(), 1);
+    await assert.rejects(store.createUser({ username: 'owner', passwordHash: 'h', role: 'admin' }), (error) => error.code === '23505');
+    await store.createSession({ id: 's1', userId: user.id, expiresAt: new Date(Date.now() + 60000).toISOString() });
+    await store.createSession({ id: 's2', userId: user.id, expiresAt: new Date(Date.now() + 60000).toISOString() });
+    await store.deleteUserSessions(user.id, { except: 's2' });
+    assert.equal(await store.getSession('s1'), null);
+    assert.equal((await store.getSession('s2')).userId, user.id);
+    assert.equal((await store.updateUser(user.id, { disabled: true })).disabled, true);
+    assert.equal(await store.deleteUser(user.id), true);
+    assert.equal(await store.getSession('s2'), null);
   });
 
   test(`${kind} store: deleting an institution removes its timetables`, { skip }, async (t) => {
