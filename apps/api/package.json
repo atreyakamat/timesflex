@@ -14,6 +14,7 @@
     "dev": "node --watch src/index.js",
     "build": "echo \"build not configured yet\"",
     "lint": "echo \"lint not configured yet\"",
-    "typecheck": "echo \"typecheck not configured yet\""
+    "typecheck": "echo \"typecheck not configured yet\"",
+    "test": "node --test test/*.test.js"
   }
 }

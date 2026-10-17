@@ -1,244 +1,159 @@
-// Triggering restart
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import cors from 'cors';
 import express from 'express';
 
-import {
-  createInstitution,
-  createTimetable,
-  deleteInstitution,
-  getInstitution,
-  getTimetable,
-  initDb,
-  listInstitutions,
-  listTimetables,
-  updateTimetableSessions,
-} from './db.js';
+import { createStore } from './db.js';
+import { aiConfig, aiStatus } from './llm.js';
+import { parseRequirements } from './parser.js';
 import { solveWithSolver } from './solverClient.js';
 
-const app = express();
-const databaseUrl = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/timesflex';
-const db = await initDb(databaseUrl);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const store = await createStore({
+  databaseUrl: process.env.DATABASE_URL,
+  dataFile: process.env.DATA_FILE ?? path.resolve(here, '../data/timesflex.json'),
+});
 
+const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
-app.get('/health', (request, response) => {
-  response.json({ service: 'timesflex-api', status: 'ok' });
-});
-
-app.get('/api/institutions', async (request, response) => {
+// Wrap async handlers so every failure becomes a JSON 500 instead of a hung request.
+const route = (handler) => async (request, response) => {
   try {
-    const institutions = await listInstitutions(db);
-    response.json(institutions);
+    await handler(request, response);
   } catch (error) {
-    response.status(500).json({ error: error.message });
+    response.status(500).json({ error: error.message ?? 'Unexpected error' });
   }
+};
+
+const notFound = (response, what) => response.status(404).json({ error: `${what} not found` });
+
+app.get('/health', (request, response) => {
+  response.json({ service: 'timesflex-api', status: 'ok', storage: store.kind, ai: aiConfig().provider });
 });
 
-app.post('/api/institutions', async (request, response) => {
+app.get('/api/ai/status', route(async (request, response) => {
+  response.json(await aiStatus());
+}));
+
+app.get('/api/institutions', route(async (request, response) => {
+  response.json(await store.listInstitutions());
+}));
+
+app.post('/api/institutions', route(async (request, response) => {
   const { name, type, profile } = request.body ?? {};
   if (!name || !type) {
     response.status(400).json({ error: 'name and type are required' });
     return;
   }
+  response.status(201).json(await store.createInstitution({ name, type, data: profile ?? {} }));
+}));
 
-  try {
-    const institution = await createInstitution(db, {
-      name,
-      type,
-      data: profile ?? request.body,
-    });
-    response.status(201).json(institution);
-  } catch (error) {
-    response.status(500).json({ error: error.message });
+app.get('/api/institutions/:id', route(async (request, response) => {
+  const institution = await store.getInstitution(request.params.id);
+  if (!institution) return notFound(response, 'Institution');
+  response.json(institution);
+}));
+
+app.put('/api/institutions/:id', route(async (request, response) => {
+  const { name, type, profile } = request.body ?? {};
+  if (!name || !type) {
+    response.status(400).json({ error: 'name and type are required' });
+    return;
   }
-});
+  const updated = await store.updateInstitution(request.params.id, { name, type, data: profile ?? {} });
+  if (!updated) return notFound(response, 'Institution');
+  response.json(updated);
+}));
 
-app.get('/api/institutions/:id', async (request, response) => {
-  try {
-    const institution = await getInstitution(db, request.params.id);
-    if (!institution) {
-      response.status(404).json({ error: 'Institution not found' });
-      return;
-    }
-    response.json(institution);
-  } catch (error) {
-    response.status(500).json({ error: error.message });
+app.delete('/api/institutions/:id', route(async (request, response) => {
+  const success = await store.deleteInstitution(request.params.id);
+  if (!success) return notFound(response, 'Institution');
+  response.json({ success: true });
+}));
+
+app.post('/api/institutions/:id/timetables', route(async (request, response) => {
+  const institution = await store.getInstitution(request.params.id);
+  if (!institution) return notFound(response, 'Institution');
+
+  const { label, request: timetableRequest } = request.body ?? {};
+  if (!timetableRequest?.days || !timetableRequest?.slots || !timetableRequest?.sessions) {
+    response.status(400).json({ error: 'request.days, request.slots, and request.sessions are required' });
+    return;
   }
-});
+  const timetable = await store.createTimetable({
+    institutionId: institution.id,
+    label: label ?? 'Initial version',
+    status: 'draft',
+    request: timetableRequest,
+  });
+  response.status(201).json(timetable);
+}));
 
-app.delete('/api/institutions/:id', async (request, response) => {
-  try {
-    const success = await deleteInstitution(db, request.params.id);
-    if (!success) {
-      response.status(404).json({ error: 'Institution not found' });
-      return;
-    }
-    response.json({ success: true });
-  } catch (error) {
-    response.status(500).json({ error: error.message });
-  }
-});
+app.get('/api/institutions/:id/timetables', route(async (request, response) => {
+  const institution = await store.getInstitution(request.params.id);
+  if (!institution) return notFound(response, 'Institution');
+  response.json(await store.listTimetables(institution.id));
+}));
 
-app.post('/api/institutions/:id/timetables', async (request, response) => {
-  try {
-    const institution = await getInstitution(db, request.params.id);
-    if (!institution) {
-      response.status(404).json({ error: 'Institution not found' });
-      return;
-    }
+app.get('/api/timetables/:id', route(async (request, response) => {
+  const timetable = await store.getTimetable(request.params.id);
+  if (!timetable) return notFound(response, 'Timetable');
+  response.json(timetable);
+}));
 
-    const { label, request: timetableRequest } = request.body ?? {};
-    if (!timetableRequest?.days || !timetableRequest?.slots || !timetableRequest?.sessions) {
-      response.status(400).json({ error: 'request.days, request.slots, and request.sessions are required' });
-      return;
-    }
-
-    const timetable = await createTimetable(db, {
-      institutionId: institution.id,
-      label: label ?? 'Initial version',
-      status: 'draft',
-      request: timetableRequest,
-    });
-
-    response.status(201).json(timetable);
-  } catch (error) {
-    response.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/institutions/:id/timetables', async (request, response) => {
-  try {
-    const institution = await getInstitution(db, request.params.id);
-    if (!institution) {
-      response.status(404).json({ error: 'Institution not found' });
-      return;
-    }
-    const timetables = await listTimetables(db, institution.id);
-    response.json(timetables);
-  } catch (error) {
-    response.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/timetables/:id', async (request, response) => {
-  try {
-    const timetable = await getTimetable(db, request.params.id);
-    if (!timetable) {
-      response.status(404).json({ error: 'Timetable not found' });
-      return;
-    }
-    response.json(timetable);
-  } catch (error) {
-    response.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/parse', (request, response) => {
-  const { text } = request.body ?? {};
-  if (!text) {
+app.post('/api/parse', route(async (request, response) => {
+  const { text, context } = request.body ?? {};
+  if (!text || !String(text).trim()) {
     response.status(400).json({ error: 'text is required' });
     return;
   }
+  response.json(await parseRequirements(String(text), context ?? {}));
+}));
 
-  const draft = {
-    teachers: [],
-    subjects: [],
-    rooms: [],
-    divisions: [],
-  };
+app.post('/api/timetables/:id/solve', route(async (request, response) => {
+  const timetable = await store.getTimetable(request.params.id);
+  if (!timetable) return notFound(response, 'Timetable');
 
-  // Improved Teacher Extraction (handles "Add teachers Alice, Bob, and Charlie")
-  const teacherBlock = text.match(/(?:teachers?)\s+([^.]+)/i);
-  if (teacherBlock) {
-    const names = teacherBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
-    names.forEach(name => {
-      draft.teachers.push({ name, maxLecturesPerDay: 4, maxLecturesPerWeek: 20 });
-    });
-  }
+  const solverResult = await solveWithSolver(timetable.request);
+  const updated = await store.updateTimetableSessions(
+    timetable.id,
+    solverResult.scheduled_sessions,
+    solverResult.status === 'ok' ? 'generated' : 'partial',
+  );
+  response.json({ timetable: updated, solver: solverResult });
+}));
 
-  // Improved Subject Extraction (handles "Mathematics (2 slots), Physics")
-  const subjectBlock = text.match(/(?:subjects?)\s+([^.]+)/i);
-  if (subjectBlock) {
-    const parts = subjectBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
-    parts.forEach(part => {
-      const durationMatch = part.match(/(\d+)\s*slots?/i);
-      const name = part.replace(/\(.*\)/, '').trim();
-      draft.subjects.push({
-        name,
-        isLab: name.toLowerCase().includes('lab'),
-        durationSlots: durationMatch ? parseInt(durationMatch[1]) : 1,
-        sessionsPerWeek: 3,
-      });
-    });
-  }
+const STATUSES = ['draft', 'generated', 'partial', 'edited', 'approved'];
 
-  // Improved Room Extraction
-  const roomBlock = text.match(/(?:rooms?)\s+([^.]+)/i);
-  if (roomBlock) {
-    const names = roomBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
-    names.forEach(name => {
-      draft.rooms.push({ name, type: 'classroom', capacity: 40 });
-    });
-  }
-
-  // Improved Division Extraction
-  const divisionBlock = text.match(/(?:divisions?)\s+([^.]+)/i);
-  if (divisionBlock) {
-    const names = divisionBlock[1].split(/(?:,|and)/i).map(s => s.trim()).filter(Boolean);
-    names.forEach(name => {
-      draft.divisions.push({ name, batches: [] });
-    });
-  }
-
-  response.json(draft);
-});
-
-app.post('/api/timetables/:id/solve', async (request, response) => {
-  try {
-    const timetable = await getTimetable(db, request.params.id);
-    if (!timetable) {
-      response.status(404).json({ error: 'Timetable not found' });
-      return;
-    }
-
-    const solverResult = await solveWithSolver(timetable.request);
-    const updated = await updateTimetableSessions(
-      db,
-      timetable.id,
-      solverResult.scheduled_sessions,
-      solverResult.status === 'ok' ? 'generated' : 'partial',
-    );
-    response.json({
-      timetable: updated,
-      solver: solverResult,
-    });
-  } catch (error) {
-    response.status(500).json({ error: error.message ?? 'Solver failed' });
-  }
-});
-
-app.put('/api/timetables/:id', async (request, response) => {
-  const { generatedSessions } = request.body ?? {};
-  if (!Array.isArray(generatedSessions)) {
+// Save hand edits and/or change status. Sending only { status: 'approved' } approves as-is.
+app.put('/api/timetables/:id', route(async (request, response) => {
+  const { generatedSessions, status } = request.body ?? {};
+  if (generatedSessions !== undefined && !Array.isArray(generatedSessions)) {
     response.status(400).json({ error: 'generatedSessions must be an array' });
     return;
   }
-
-  try {
-    const updated = await updateTimetableSessions(db, request.params.id, generatedSessions, 'edited');
-    if (!updated) {
-      response.status(404).json({ error: 'Timetable not found' });
-      return;
-    }
-    response.json(updated);
-  } catch (error) {
-    response.status(500).json({ error: error.message });
+  if (status !== undefined && !STATUSES.includes(status)) {
+    response.status(400).json({ error: `status must be one of ${STATUSES.join(', ')}` });
+    return;
   }
-});
+  const existing = await store.getTimetable(request.params.id);
+  if (!existing) return notFound(response, 'Timetable');
+  const updated = await store.updateTimetableSessions(
+    existing.id,
+    generatedSessions ?? existing.generatedSessions,
+    status ?? 'edited',
+  );
+  response.json(updated);
+}));
 
 const port = process.env.PORT ?? 3001;
 
 app.listen(port, () => {
-  console.log(`TimeFlex API listening on port ${port}`);
+  const ai = aiConfig();
+  console.log(`TimeFlex API listening on http://localhost:${port}`);
+  console.log(`  storage: ${store.kind}${store.kind === 'file' ? ' (set DATABASE_URL to use PostgreSQL)' : ''}`);
+  console.log(`  ai:      ${ai.provider} ${ai.provider === 'off' ? '' : `${ai.model} @ ${ai.baseUrl}`}`);
 });

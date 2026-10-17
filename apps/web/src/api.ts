@@ -1,4 +1,12 @@
-import type { InstitutionRecord, SolverRequest, SolverResult, TimetableRecord } from './types';
+import type {
+  AiStatus,
+  InstitutionRecord,
+  ParseResult,
+  SolverRequest,
+  SolverResult,
+  TimetableRecord,
+  TimetableStatus,
+} from './types';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:3001';
 
@@ -51,11 +59,28 @@ export const listTimetables = async (institutionId: string): Promise<TimetableRe
   return requestJson(`/api/institutions/${institutionId}/timetables`);
 };
 
-export const parseRequirements = async (text: string): Promise<any> => {
+export const updateInstitution = async (
+  id: string,
+  payload: { name: string; type: string; profile: Record<string, unknown> },
+): Promise<InstitutionRecord> => {
+  return requestJson(`/api/institutions/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+};
+
+export const parseRequirements = async (
+  text: string,
+  context: { teachers: string[]; rooms: string[] },
+): Promise<ParseResult> => {
   return requestJson('/api/parse', {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, context }),
   });
+};
+
+export const getAiStatus = async (): Promise<AiStatus> => {
+  return requestJson('/api/ai/status');
 };
 
 export const solveTimetable = async (timetableId: string): Promise<{ timetable: TimetableRecord; solver: SolverResult }> => {
@@ -64,12 +89,13 @@ export const solveTimetable = async (timetableId: string): Promise<{ timetable: 
   });
 };
 
+/** Save edited sessions and/or change the version status (e.g. approve it). */
 export const updateTimetable = async (
   timetableId: string,
-  generatedSessions: SolverResult['scheduled_sessions'],
+  changes: { generatedSessions?: SolverResult['scheduled_sessions']; status?: TimetableStatus },
 ): Promise<TimetableRecord> => {
   return requestJson(`/api/timetables/${timetableId}`, {
     method: 'PUT',
-    body: JSON.stringify({ generatedSessions }),
+    body: JSON.stringify(changes),
   });
 };

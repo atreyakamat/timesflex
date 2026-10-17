@@ -2,6 +2,13 @@ import { useEffect, useState } from 'react';
 import { deleteInstitution, listInstitutions } from '../api';
 import type { InstitutionRecord } from '../types';
 
+const summary = (record: InstitutionRecord) => {
+  const profile = ((record.data as any)?.profile ?? record.data ?? {}) as Record<string, unknown[] | undefined>;
+  const count = (key: string, label: string) => `${profile[key]?.length ?? 0} ${label}`;
+  const updated = record.updatedAt ? ` · updated ${new Date(record.updatedAt).toLocaleDateString()}` : '';
+  return `${count('divisions', 'divisions')} · ${count('teachers', 'teachers')} · ${count('subjects', 'subjects')}${updated}`;
+};
+
 interface DashboardProps {
   onLoadInstitution: (record: InstitutionRecord) => void;
   onNewInstitution: () => void;
@@ -61,7 +68,7 @@ export function Dashboard({ onLoadInstitution, onNewInstitution }: DashboardProp
                 ×
               </button>
               <h3>{inst.name}</h3>
-              <p>Managed profile with subjects, teachers and rooms.</p>
+              <p>{summary(inst)}</p>
               <div className="card-footer">
                 <span>Open Profile →</span>
               </div>
