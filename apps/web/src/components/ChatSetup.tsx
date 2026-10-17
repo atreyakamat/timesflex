@@ -1,100 +1,168 @@
-import { useState } from 'react';
-import { parseRequirements } from '../api';
-import type { DivisionForm, RoomForm, SubjectForm, TeacherForm } from '../types';
-import { createId } from '../utils';
+import { useEffect, useState } from 'react';
+import { getAiStatus, parseRequirements } from '../api';
+import type { AiStatus, ChatDraft, ParseResult } from '../types';
 
 interface ChatSetupProps {
-  onApply: (draft: {
-    teachers: TeacherForm[];
-    subjects: SubjectForm[];
-    rooms: RoomForm[];
-    divisions: DivisionForm[];
-  }) => void;
+  onApply: (draft: ChatDraft) => void;
+  context: { teachers: string[]; rooms: string[] };
 }
 
-export function ChatSetup({ onApply }: ChatSetupProps) {
+const SAMPLE = `Computer Engineering, second year. Classes run Monday to Friday, 9am to 4pm, 1 hour periods, with a 30 minute break after the 3rd period.
+Divisions SE-A (batches A1, A2) and SE-B (batches B1, B2). SE-A has 60 students and SE-B has 56 students.
+Prof. Mehta teaches DBMS 4 times a week in Room 101, max 4 lectures a day, not available on Friday.
+Dr. Rao teaches Operating Systems 3 times a week in Room 102.
+Ms. Kulkarni teaches Maths 3 times a week in Room 101.
+DBMS Lab is a 2 hour practical once a week with Prof. Mehta in Lab 1.`;
+
+type ListKey = 'divisions' | 'teachers' | 'rooms' | 'subjects';
+
+const describe: Record<ListKey, (item: any) => string> = {
+  divisions: (d) =>
+    (d.batches.length ? `batches ${d.batches.join(', ')}` : 'no batches') + (d.size ? ` · ${d.size} students` : ''),
+  teachers: (t) =>
+    `${t.maxLecturesPerDay}/day, ${t.maxLecturesPerWeek}/week` +
+    (t.unavailableDays.length ? ` · off ${t.unavailableDays.join(', ')}` : ''),
+  rooms: (r) => `${r.type} · ${r.capacity} seats`,
+  subjects: (s) =>
+    `${s.isLab ? 'Lab' : 'Lecture'} · ${s.sessionsPerWeek}/week × ${s.durationSlots} slot(s) · ` +
+    `${s.teacher ?? 'no teacher'} · ${s.room ?? 'no room'}`,
+};
+
+export function ChatSetup({ onApply, context }: ChatSetupProps) {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [draft, setDraft] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<ParseResult | null>(null);
+  const [ai, setAi] = useState<AiStatus | null>(null);
+
+  useEffect(() => {
+    getAiStatus().then(setAi).catch(() => setAi(null));
+  }, []);
 
   const handleParse = async () => {
     setLoading(true);
+    setError('');
     try {
-      const result = await parseRequirements(text);
-      setDraft(result);
+      setResult(await parseRequirements(text, context));
     } catch (e) {
-      alert('Failed to parse text');
+      setError(e instanceof Error ? e.message : 'Failed to parse text');
     } finally {
       setLoading(false);
     }
   };
 
+  const removeItem = (key: ListKey, index: number) => {
+    if (!result) return;
+    const draft = { ...result.draft, [key]: result.draft[key].filter((_, i) => i !== index) };
+    setResult({ ...result, draft });
+  };
+
   const handleApply = () => {
-    if (!draft) return;
-
-    const finalDraft = {
-      teachers: draft.teachers.map((t: any) => ({ ...t, id: createId() })),
-      rooms: draft.rooms.map((r: any) => ({ ...r, id: createId() })),
-      divisions: draft.divisions.map((d: any) => ({ ...d, id: createId() })),
-      subjects: draft.subjects.map((s: any) => ({ 
-        ...s, 
-        id: createId(), 
-        teacherId: '', 
-        roomId: '' 
-      })),
-    };
-
-    onApply(finalDraft);
-    setDraft(null);
+    if (!result) return;
+    onApply(result.draft);
+    setResult(null);
     setText('');
   };
+
+  const aiReady = ai?.reachable && ai.modelAvailable;
+  const inst = result?.draft.institution;
+  const timing = inst
+    ? [
+        inst.name,
+        inst.workingDays.length ? inst.workingDays.join(', ') : null,
+        inst.startTime && inst.endTime ? `${inst.startTime}–${inst.endTime}` : null,
+        inst.slotDurationMinutes ? `${inst.slotDurationMinutes} min periods` : null,
+        inst.breakAfterSlots && inst.breakDurationMinutes
+          ? `${inst.breakDurationMinutes} min break after period ${inst.breakAfterSlots}`
+          : null,
+      ].filter(Boolean)
+    : [];
 
   return (
     <section className="card chat-setup">
       <header>
-        <h1>Chat flow setup</h1>
-        <p>Convert natural language requirements into a structured draft.</p>
+        <h1>Quick setup</h1>
+        <p>Describe your department in plain words. A local AI model turns it into a draft you review before anything is saved.</p>
       </header>
+
+      <div className={`ai-pill ${aiReady ? 'ok' : 'off'}`} title={ai?.error ?? ''}>
+        {ai === null
+          ? 'Checking local AI…'
+          : aiReady
+            ? `Local AI ready · ${ai.model}`
+            : `Local AI offline. The basic parser will be used. ${ai.error ?? ''}`}
+      </div>
 
       <div className="chat-container">
         <textarea
-          placeholder="e.g. Add teachers John Doe and Jane Smith. Add subjects Mathematics and Science. Add rooms 101 and 102."
+          placeholder="e.g. Monday to Friday, 9am to 4pm. Division SE-A with batches A1, A2. Prof. Mehta teaches DBMS 4 times a week in Room 101…"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          rows={5}
+          rows={8}
         />
-        <button 
-          type="button" 
-          className="secondary" 
-          onClick={handleParse} 
-          disabled={loading || !text}
-        >
-          {loading ? 'Parsing...' : 'Analyze Requirements'}
-        </button>
+        <div className="action-row">
+          <button type="button" className="primary" onClick={handleParse} disabled={loading || !text.trim()}>
+            {loading ? (aiReady ? 'Reading with local AI…' : 'Parsing…') : 'Build draft'}
+          </button>
+          <button type="button" className="secondary" onClick={() => setText(SAMPLE)} disabled={loading}>
+            Use sample text
+          </button>
+        </div>
+        {error && <p className="text-danger">{error}</p>}
       </div>
 
-      {draft && (
+      {result && (
         <div className="draft-preview">
-          <h3>Review Draft</h3>
-          <div className="draft-summary">
-            {draft.teachers.length > 0 && (
-              <p>👥 <strong>{draft.teachers.length}</strong> Teachers</p>
-            )}
-            {draft.subjects.length > 0 && (
-              <p>📚 <strong>{draft.subjects.length}</strong> Subjects</p>
-            )}
-            {draft.rooms.length > 0 && (
-              <p>🏢 <strong>{draft.rooms.length}</strong> Rooms</p>
-            )}
-            {draft.divisions.length > 0 && (
-              <p>🏫 <strong>{draft.divisions.length}</strong> Divisions</p>
-            )}
-          </div>
+          <h3>
+            Review draft{' '}
+            <small>
+              {result.source === 'llm' ? `by ${ai?.model ?? 'local model'}` : 'by rule parser'} ·{' '}
+              {(result.elapsedMs / 1000).toFixed(1)}s
+            </small>
+          </h3>
+
+          {result.warnings.length > 0 && (
+            <ul className="draft-warnings">
+              {result.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+
+          {timing.length > 0 && (
+            <p>
+              <strong>Timing:</strong> {timing.join(' · ')}
+            </p>
+          )}
+
+          {(['divisions', 'teachers', 'rooms', 'subjects'] as ListKey[]).map((key) =>
+            result.draft[key].length ? (
+              <div key={key} className="draft-group">
+                <h4>
+                  {key} ({result.draft[key].length})
+                </h4>
+                <div className="list">
+                  {result.draft[key].map((item: any, index: number) => (
+                    <div key={`${key}-${item.name}`} className="list-item">
+                      <div className="list-content">
+                        <strong>{item.name}</strong>
+                        <span>{describe[key](item)}</span>
+                      </div>
+                      <button type="button" className="text-danger" onClick={() => removeItem(key, index)}>
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null,
+          )}
+
           <div className="action-row">
             <button type="button" className="primary" onClick={handleApply}>
-              Accept & Apply to Profile
+              Accept & apply to profile
             </button>
-            <button type="button" className="secondary" onClick={() => setDraft(null)}>
+            <button type="button" className="secondary" onClick={() => setResult(null)}>
               Discard
             </button>
           </div>

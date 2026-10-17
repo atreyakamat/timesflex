@@ -199,3 +199,29 @@ The scheduler should:
 - Whether chat parsing should be handled in the backend API or a dedicated AI service.
 - How aggressive soft-constraint optimization should be during MVP generation.
 - Whether timetable edits should be stored as patches or as a full regenerated version.
+
+## MVP Decisions (October 2026)
+- **Chat parsing lives in the API** (`apps/api/src/parser.js`), not a separate AI service. It calls a small local
+  open-weight model (default Qwen3 0.6B via Ollama, or any OpenAI-compatible server) and works offline.
+- **Hybrid extraction**: one schema-constrained model call, then deterministic rules for regular phrasing
+  (days, hours, breaks, "X teaches Y", divisions and batches), then sentence-local grounding so values the
+  model attaches to the wrong entity are dropped. With no model running, the rules alone produce the draft.
+- **Review before apply**: the draft is merged into the profile by name only after the user accepts it.
+- **Solver returns partial schedules**: every session is optional with a large placement reward, so an
+  over-constrained profile still yields a timetable plus readable capacity diagnostics.
+- **Lab batches**: a lab session per batch; sibling batches may run in parallel, whole-division sessions may not.
+- **Edits are stored as full versions**: each generation creates a timetable version; manual edits overwrite
+  that version's sessions, and locks carry over to the next generation.
+- **Storage**: PostgreSQL when `DATABASE_URL` is set, otherwise a local JSON file, so a single coordinator
+  can run the whole MVP with no database setup.
+- **Rooms are a solver decision when not fixed**: a subject with no room gets one per session from the rooms of the
+  right kind (lab vs. classroom/hall) that seat the group and are open. Fixed rooms stay fixed.
+- **Availability is one grid**: teachers and rooms store blocked days plus blocked `Day|slot` cells; teachers
+  also store preferred cells (a soft penalty). Cells for days or slots that no longer exist are ignored.
+- **Subjects carry their classes**: `divisionIds` (empty means all divisions) and per-division teacher overrides,
+  which covers "subjects taught" and "assigned classes" without a separate assignment table.
+- **Versions and approval**: every generation is a version; edits overwrite that version; `approved` is a status
+  on the version. Approving saves the on-screen sessions with it.
+- **Exports are built in the browser** from one table model (break rows included), so Excel and PDF match the
+  screen. The .xlsx writer is ~150 lines over `fflate`; the PDF uses `jspdf` + `jspdf-autotable`, loaded only
+  when someone exports.

@@ -12,8 +12,11 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
+    "admin": "node src/cli/admin.js",
+    "seed": "node src/cli/seed.js",
     "build": "echo \"build not configured yet\"",
     "lint": "echo \"lint not configured yet\"",
-    "typecheck": "echo \"typecheck not configured yet\""
+    "typecheck": "echo \"typecheck not configured yet\"",
+    "test": "node --test test/*.test.js"
   }
 }

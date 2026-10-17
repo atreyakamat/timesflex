@@ -11,3 +11,7 @@ __pycache__
 .pytest_cache
 .venv
 *.pyc
+*.egg-info
+*.tsbuildinfo
+apps/api/data/
+backups/

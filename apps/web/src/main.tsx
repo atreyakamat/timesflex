@@ -1,5 +1,6 @@
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
+import { AuthGate } from './components/AuthGate';
 import './styles.css';
 
 const rootElement = document.getElementById('root');
@@ -9,5 +10,5 @@ if (!rootElement) {
 }
 
 ReactDOM.createRoot(rootElement).render(
-  <App />,
+  <AuthGate>{(user, signOut) => <App user={user} onSignOut={signOut} />}</AuthGate>,
 );
