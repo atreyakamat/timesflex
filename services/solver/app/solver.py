@@ -11,6 +11,9 @@ from .models import Room, ScheduledSession, SessionRequest, SolverRequest, TimeR
 # so a feasible placement is never traded away for a "nicer" timetable.
 PLACE_WEIGHT = 1000
 LOCKED_PLACE_WEIGHT = 10 * PLACE_WEIGHT
+# Keeping a locked session in its pinned cell beats every soft preference, but a
+# clash between locks moves one of them instead of dropping it.
+LOCK_KEEP_WEIGHT = 500
 SAME_DAY_REPEAT_PENALTY = 30
 DIFFICULT_PEAK_PENALTY = 12
 DIVISION_PEAK_PENALTY = 8
@@ -227,27 +230,32 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
     subject_day_count: dict[tuple[str, str, str, int], list] = defaultdict(list)
     soft_terms = []
 
+    pinned_keys: dict[int, set[tuple[int, int, str]]] = {}
     for s, session in enumerate(request.sessions):
         options = room_options(session, request.rooms)
-        candidates: list[tuple[int, int, str]] = []
-        if session.locked and session.day in day_index and session.slot in slot_index:
-            d, t = day_index[session.day], slot_index[session.slot]
-            pinned_rooms = [session.room_id] if session.room_id else options
-            candidates = [(d, t, r) for r in pinned_rooms if valid_start(session, d, t) and room_free(r, session, d, t)]
-            if not candidates:
+        candidates = [
+            (d, t, r)
+            for d in range(num_days)
+            for t in range(num_slots)
+            if valid_start(session, d, t)
+            for r in options
+            if room_free(r, session, d, t)
+        ]
+        if session.locked:
+            if session.day in day_index and session.slot in slot_index:
+                d, t = day_index[session.day], slot_index[session.slot]
+                pinned_rooms = {session.room_id} if session.room_id else set(options)
+                pinned_keys[s] = {key for key in candidates if key[0] == d and key[1] == t and key[2] in pinned_rooms}
+                if not pinned_keys[s]:
+                    result.diagnostics.append(
+                        f"Locked {_group_label(request, session)} on {session.day} {session.slot} "
+                        "breaks a hard rule (break, day end, teacher or room unavailability) and was released."
+                    )
+            else:
                 result.diagnostics.append(
-                    f"Locked {request.names.get(session.subject_id, session.subject_id)} on {session.day} {session.slot} "
-                    "breaks a hard rule (break, day end, teacher or room unavailability) and was released."
+                    f"Locked {_group_label(request, session)} points at {session.day} {session.slot}, "
+                    "which is no longer in the timetable, and was released."
                 )
-        if not candidates:
-            candidates = [
-                (d, t, r)
-                for d in range(num_days)
-                for t in range(num_slots)
-                if valid_start(session, d, t)
-                for r in options
-                if room_free(r, session, d, t)
-            ]
 
         groups = (
             [session.batch] if session.batch else sorted(batches_by_division[session.division_id]) + [WHOLE_DIVISION]
@@ -316,16 +324,26 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
         (LOCKED_PLACE_WEIGHT if session.locked else PLACE_WEIGHT) * session.duration_slots * placed[s]
         for s, session in enumerate(request.sessions)
     ]
+    for s, keys in pinned_keys.items():
+        reward.extend(LOCK_KEEP_WEIGHT * starts[s][key] for key in keys)
     model.Maximize(sum(reward) - sum(penalties))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = request.time_limit_seconds
-    solver.parameters.num_search_workers = 8
+    solver.parameters.num_workers = 8
+    # Same input, same timetable: regenerating should not reshuffle everything.
+    solver.parameters.random_seed = 0
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         result.unscheduled = list(request.sessions)
-        result.diagnostics.append("The solver could not find any placement within the time limit.")
+        if status == cp_model.UNKNOWN:
+            result.diagnostics.append(
+                f"The solver found no placement within the {request.time_limit_seconds:g}s time limit. "
+                "Try again with a longer limit or fewer sessions."
+            )
+        else:
+            result.diagnostics.append("The solver input is contradictory, so nothing could be placed.")
         return result
 
     for s, session in enumerate(request.sessions):
@@ -334,6 +352,11 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
             result.unscheduled.append(session)
             continue
         d, t, room_id = chosen
+        if chosen not in pinned_keys.get(s, {chosen}):
+            result.diagnostics.append(
+                f"Locked {_group_label(request, session)} on {session.day} {session.slot} clashed with another "
+                f"session and was moved to {days[d]} {slots[t]}."
+            )
         result.scheduled.append(
             ScheduledSession(
                 **session.model_dump(exclude={"day", "slot", "room_id"}),
@@ -343,9 +366,11 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
             )
         )
 
-    if result.unscheduled and not result.diagnostics:
+    if result.unscheduled:
+        labels = sorted({_group_label(request, session) for session in result.unscheduled})
+        shown = ", ".join(labels[:10]) + (f" and {len(labels) - 10} more" if len(labels) > 10 else "")
         result.diagnostics.append(
-            f"{len(result.unscheduled)} session(s) could not be placed without breaking a hard constraint. "
+            f"{len(result.unscheduled)} session(s) could not be placed without breaking a hard constraint: {shown}. "
             "Add slots or rooms, raise teacher limits, or reduce sessions per week."
         )
     return result

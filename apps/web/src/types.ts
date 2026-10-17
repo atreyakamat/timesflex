@@ -141,6 +141,8 @@ export interface TimetableRecord {
   status: TimetableStatus;
   request: SolverRequest;
   generatedSessions: ScheduledSession[];
+  /** What the last solve could not place, and why. */
+  report?: { unscheduledSessions: SessionRequest[]; diagnostics: string[] } | null;
   createdAt?: string;
   updatedAt?: string;
 }

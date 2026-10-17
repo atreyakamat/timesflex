@@ -11,13 +11,24 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:3001';
 
 const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
-    ...options,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
+    });
+  } catch {
+    throw new Error('Cannot reach the TimeFlex server. Check that it is running.');
+  }
 
   if (!response.ok) {
-    const message = await response.text();
+    const text = await response.text();
+    let message = text;
+    try {
+      message = JSON.parse(text).error ?? text;
+    } catch {
+      // Not JSON; show the text as-is.
+    }
     throw new Error(message || `Request failed: ${response.status}`);
   }
 

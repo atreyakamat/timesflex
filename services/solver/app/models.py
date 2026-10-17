@@ -34,8 +34,8 @@ Unavailability = TimeRef
 
 class TeacherConstraint(BaseModel):
     teacher_id: str
-    max_lectures_per_day: int
-    max_lectures_per_week: int
+    max_lectures_per_day: int = Field(ge=0)
+    max_lectures_per_week: int = Field(ge=0)
     unavailable: list[TimeRef] = Field(default_factory=list)
     # Soft: when set, sessions outside these slots are penalised.
     preferred: list[TimeRef] = Field(default_factory=list)

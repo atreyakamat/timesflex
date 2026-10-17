@@ -192,3 +192,38 @@ def test_difficult_subjects_are_spread_across_days():
     result = solve_timetable(SolverRequest(days=DAYS, slots=SLOTS, sessions=sessions))
     heavy_per_day = Counter(item.day for item in result.scheduled if item.difficult)
     assert max(heavy_per_day.values()) == 2
+
+
+def test_clashing_locks_move_one_session_instead_of_dropping_it():
+    sessions = [
+        session("a", locked=True, day="Monday", slot="09:00-10:00"),
+        session("b", subject="phys", room="r2", division="B", locked=True, day="Monday", slot="09:00-10:00"),
+    ]
+    result = solve_timetable(SolverRequest(days=DAYS, slots=SLOTS, sessions=sessions))
+    assert not result.unscheduled
+    assert_no_overlaps(result.scheduled)
+    assert sum(1 for item in result.scheduled if (item.day, item.slot) == ("Monday", "09:00-10:00")) == 1
+    assert any("clashed with another session and was moved" in d for d in result.diagnostics)
+
+
+def test_unplaced_sessions_are_named_even_when_other_warnings_exist():
+    sessions = [session(f"m{i}") for i in range(31)] + [
+        session("long", subject="chem", teacher="t2", room="r2", division="B", duration_slots=4)
+    ]
+    result = solve_timetable(SolverRequest(days=DAYS, slots=SLOTS, sessions=sessions, names={"math": "Maths"}))
+    assert any("could not be placed" in d and "Maths (A)" in d for d in result.diagnostics)
+
+
+def test_lock_on_removed_slot_is_reported():
+    sessions = [session("m0", locked=True, day="Saturday", slot="09:00-10:00")]
+    result = solve_timetable(SolverRequest(days=DAYS, slots=SLOTS, sessions=sessions))
+    assert len(result.scheduled) == 1
+    assert any("no longer in the timetable" in d for d in result.diagnostics)
+
+
+def test_negative_teacher_limit_is_rejected():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        TeacherConstraint(teacher_id="t1", max_lectures_per_day=-1, max_lectures_per_week=10)

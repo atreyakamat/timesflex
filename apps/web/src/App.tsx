@@ -88,6 +88,13 @@ export function App() {
     setDiagnostics([]);
   };
 
+  const showVersion = (version: TimetableRecord) => {
+    setTimetableId(version.id);
+    setScheduledSessions(version.generatedSessions ?? []);
+    setUnscheduledSessions(version.report?.unscheduledSessions ?? []);
+    setDiagnostics(version.report?.diagnostics ?? []);
+  };
+
   const handleLoadInstitution = async (record: InstitutionRecord) => {
     const profile = (record.data as any)?.profile || record.data;
     if (profile) {
@@ -109,8 +116,7 @@ export function App() {
       setVersions(all);
       const latest = all.find((version) => version.generatedSessions?.length);
       if (latest) {
-        setTimetableId(latest.id);
-        setScheduledSessions(latest.generatedSessions);
+        showVersion(latest);
         setStatusMessage(`Loaded ${record.name} with its latest timetable (${latest.status}).`);
       }
     } catch {
@@ -291,10 +297,11 @@ export function App() {
         label: `Version ${versions.length + 1}`,
         request,
       });
-      setTimetableId(timetableRecord.id);
-
       setStatusMessage(`Solving ${request.sessions.length} sessions with OR-Tools...`);
       const solved = await solveTimetable(timetableRecord.id);
+      // Only switch to the new version once it has a result, so a failed solve
+      // leaves the previous version on screen and as the save target.
+      setTimetableId(timetableRecord.id);
       setScheduledSessions(solved.solver.scheduled_sessions);
       setUnscheduledSessions(solved.solver.unscheduled_sessions);
       setDiagnostics(solved.solver.diagnostics ?? []);
@@ -317,16 +324,26 @@ export function App() {
     );
   };
 
+  const currentVersion = versions.find((version) => version.id === timetableId);
+  const isApproved = currentVersion?.status === 'approved';
+
   const handleSaveEdits = async () => {
     setBusy(true);
     setStatusMessage('Saving...');
     try {
       await saveProfile();
-      if (timetableId) {
+      // Approved versions are read-only on the server; saving the profile must not touch them.
+      if (timetableId && !isApproved) {
         const saved = await updateTimetable(timetableId, { generatedSessions: scheduledSessions });
         setVersions((list) => list.map((version) => (version.id === saved.id ? saved : version)));
       }
-      setStatusMessage(timetableId ? 'Profile and timetable edits saved.' : 'Profile saved.');
+      setStatusMessage(
+        !timetableId
+          ? 'Profile saved.'
+          : isApproved
+            ? 'Profile saved. The approved timetable was left unchanged; unapprove it to edit.'
+            : 'Profile and timetable edits saved.',
+      );
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Failed to save edits.');
     } finally {
@@ -337,10 +354,7 @@ export function App() {
   const handleSelectVersion = (id: string) => {
     const version = versions.find((item) => item.id === id);
     if (!version) return;
-    setTimetableId(version.id);
-    setScheduledSessions(version.generatedSessions ?? []);
-    setUnscheduledSessions([]);
-    setDiagnostics([]);
+    showVersion(version);
     setStatusMessage(`Showing ${version.label} (${version.status}).`);
   };
 
@@ -349,7 +363,11 @@ export function App() {
     setBusy(true);
     try {
       // Approving saves the current edits with it, so the approved version is exactly what is on screen.
-      const saved = await updateTimetable(timetableId, { generatedSessions: scheduledSessions, status });
+      // Unapproving only changes the status.
+      const saved = await updateTimetable(
+        timetableId,
+        status === 'approved' ? { generatedSessions: scheduledSessions, status } : { status },
+      );
       setVersions((list) => list.map((version) => (version.id === saved.id ? saved : version)));
       setStatusMessage(
         status === 'approved' ? `${saved.label} approved. Export it from this tab.` : `${saved.label} reopened for edits.`,
