@@ -4,7 +4,18 @@ TimeFlex is an enterprise education scheduling platform for AI-assisted and manu
 This MVP covers the PRD's first slice: **one college department timetable**, set up by a timetable
 coordinator in plain words (parsed by a small local model) or by hand, then solved with OR-Tools.
 
-## Quick start
+## Pilot install (Docker)
+
+One command brings up PostgreSQL, the solver, the local model (Ollama + qwen3:0.6b), the app and nightly
+backups. Full steps, backups and troubleshooting are in [docs/PILOT_RUNBOOK.md](docs/PILOT_RUNBOOK.md).
+
+```bash
+cp .env.example .env          # set POSTGRES_PASSWORD
+docker compose up -d --build  # app at http://localhost:3001
+docker compose exec app node apps/api/src/cli/seed.js   # optional demo department
+```
+
+## Quick start (development)
 
 Needs Node 20+ and Python 3.11+. Ollama is optional.
 
@@ -138,6 +149,15 @@ scored 80%, so expect occasional misses on unfamiliar phrasing. That is why ever
 | `LOG_REQUESTS` | `true` | one line per API request on stdout; `false` silences it |
 
 Put these in a `.env` file at the repo root (copy `.env.example`); the API and the admin CLI load it on start.
+
+### Demo department and backups
+
+`npm run seed -w @timesflex/api` adds **Demo Institute of Technology**, a fictional Computer Engineering
+department (4 divisions, 8 teachers, 12 subjects) that generates a complete 64-session week. Running it
+again changes nothing.
+
+`node scripts/backup.mjs` saves a backup into `backups/` (pg_dump for PostgreSQL, a copy of the JSON file
+otherwise) and keeps the newest 14; `node scripts/backup.mjs --restore <file>` puts one back.
 
 ## Tests
 ```bash

@@ -77,3 +77,22 @@ for (const [kind, make] of Object.entries(factories)) {
     assert.equal(await store.deleteInstitution(institution.id), false);
   });
 }
+
+test('demo seed adds one department with slots and can run twice', async (t) => {
+  const { seedDemo, DEMO_NAME } = await import('../src/demo/demoDepartment.js');
+  const store = await factories.file(t);
+  const first = await seedDemo(store);
+  assert.equal(first.created, true);
+  assert.deepEqual(first.institution.data.slots, [
+    '09:00-10:00',
+    '10:00-11:00',
+    '11:15-12:15',
+    '12:15-13:15',
+    '14:00-15:00',
+    '15:00-16:00',
+    '16:00-17:00',
+  ]);
+  const second = await seedDemo(store);
+  assert.equal(second.created, false);
+  assert.deepEqual((await store.listInstitutions()).map((item) => item.name), [DEMO_NAME]);
+});

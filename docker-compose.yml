@@ -1,0 +1,87 @@
+# TimeFlex pilot stack: PostgreSQL, solver, local AI (Ollama + qwen3:0.6b), the app, and nightly backups.
+# Start:  docker compose up -d --build     then open http://localhost:3001
+# Settings come from .env next to this file (copy .env.example). POSTGRES_PASSWORD is required.
+name: timesflex
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: timesflex
+      POSTGRES_DB: timesflex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timesflex -d timesflex"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  solver:
+    build: services/solver
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:0.12.6
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+
+  # Downloads the model once (about 500 MB), then exits. Later starts find it already there.
+  ollama-pull:
+    image: ollama/ollama:0.12.6
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["sh", "-c", "sleep 3 && ollama pull ${AI_MODEL:-qwen3:0.6b}"]
+    restart: "no"
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      solver:
+        condition: service_started
+    ports:
+      - "${TIMESFLEX_PORT:-3001}:3001"
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgres://timesflex:${POSTGRES_PASSWORD}@db:5432/timesflex
+      SOLVER_URL: http://solver:8000/solve
+      SOLVER_TIMEOUT_MS: ${SOLVER_TIMEOUT_MS:-150000}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      AI_BASE_URL: http://ollama:11434
+      AI_MODEL: ${AI_MODEL:-qwen3:0.6b}
+      AI_TIMEOUT_MS: ${AI_TIMEOUT_MS:-120000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      LOG_REQUESTS: ${LOG_REQUESTS:-true}
+
+  # Dumps the database every night at BACKUP_TIME into ./backups and keeps the newest BACKUP_KEEP files.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: timesflex
+      PGDATABASE: timesflex
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_TIME: ${BACKUP_TIME:-02:00}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      - ./backups:/backups
+      - ./scripts/backup-loop.sh:/backup-loop.sh:ro
+    entrypoint: ["sh", "/backup-loop.sh"]
+
+volumes:
+  pgdata:
+  ollama:

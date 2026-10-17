@@ -32,3 +32,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: POSTGRES_PASSWORD=ci docker compose config -q
+      - run: POSTGRES_PASSWORD=ci docker compose build app solver
