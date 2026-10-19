@@ -145,6 +145,16 @@ export const createApp = ({ store, solve = solveWithSolver, loginLimiter = creat
     response.json({ success: true });
   }));
 
+  // Deleting an account removes its institution and everything in it, so it asks for the password again.
+  app.delete('/api/auth/account', requireAuth, route(async (request, response) => {
+    const { password } = request.body ?? {};
+    if (!(await verifyPassword(password ?? '', request.account.passwordHash))) {
+      return fail(response, 403, 'Password is incorrect');
+    }
+    await store.deleteAccount(request.account.id);
+    response.json({ success: true });
+  }));
+
   /* ---------- Everything below needs a session ---------- */
 
   app.use('/api', requireAuth);
@@ -173,9 +183,30 @@ export const createApp = ({ store, solve = solveWithSolver, loginLimiter = creat
   app.put('/api/institutions/:id', route(async (request, response) => {
     const { name, type, profile } = request.body ?? {};
     if (!name || !type) return fail(response, 400, 'name and type are required');
-    if (!(await ownedInstitution(request, request.params.id))) return notFound(response, 'Institution');
-    const updated = await store.updateInstitution(request.params.id, { name, type, data: profile ?? {} });
+    const existing = await ownedInstitution(request, request.params.id);
+    if (!existing) return notFound(response, 'Institution');
+    // Day-to-day records have their own endpoint (below), so a profile save from one device
+    // never rolls back absences or attendance recorded on another.
+    const operations = existing.data?.operations ?? profile?.operations;
+    const data = { ...(profile ?? {}), ...(operations && { operations }) };
+    const updated = await store.updateInstitution(request.params.id, { name, type, data });
     response.json(publicInstitution(updated));
+  }));
+
+  app.put('/api/institutions/:id/operations', route(async (request, response) => {
+    const existing = await ownedInstitution(request, request.params.id);
+    if (!existing) return notFound(response, 'Institution');
+    const { absences, substitutions, attendance } = request.body ?? {};
+    if (![absences, substitutions, attendance].every(Array.isArray)) {
+      return fail(response, 400, 'absences, substitutions and attendance must be arrays');
+    }
+    const operations = { absences, substitutions, attendance };
+    await store.updateInstitution(existing.id, {
+      name: existing.name,
+      type: existing.type,
+      data: { ...(existing.data ?? {}), operations },
+    });
+    response.json(operations);
   }));
 
   app.delete('/api/institutions/:id', route(async (request, response) => {

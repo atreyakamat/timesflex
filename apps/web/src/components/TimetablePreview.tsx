@@ -2,6 +2,10 @@ import { Fragment, useMemo, useState, type DragEvent } from 'react';
 import type { Page } from '../App';
 import { exportExcel, exportPdf, type ExportInput } from '../export';
 import { weekAsText } from '../ops';
+import { useMedia } from '../useMedia';
+import { VARIANT_STYLES, type VariantStyle } from '../variants';
+import { SessionSheet } from './SessionSheet';
+import { VariantCompare } from './VariantCompare';
 import type {
   Conflict,
   DivisionForm,
@@ -38,6 +42,10 @@ interface TimetablePreviewProps {
   onSelectVersion: (id: string) => void;
   onSetStatus: (status: 'approved' | 'edited') => void;
   onGo: (page: Page) => void;
+  onGenerateAlternative: () => void;
+  onGenerateVariants: (styles: VariantStyle[]) => void;
+  generateStyle: VariantStyle;
+  onStyleChange: (style: VariantStyle) => void;
 }
 
 type ExportScope = 'view' | 'classes' | 'batches' | 'teachers' | 'rooms' | 'everything';
@@ -78,7 +86,16 @@ export function TimetablePreview({
   onSelectVersion,
   onSetStatus,
   onGo,
+  onGenerateAlternative,
+  onGenerateVariants,
+  generateStyle,
+  onStyleChange,
 }: TimetablePreviewProps) {
+  const compactScreen = useMedia('(max-width: 720px)');
+  const [showVariants, setShowVariants] = useState(false);
+  const [variantStyles, setVariantStyles] = useState<VariantStyle[]>(['balanced', 'compact', 'teacher_days']);
+  const [mobileDay, setMobileDay] = useState(0);
+  const [editing, setEditing] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>('all');
   const [scope, setScope] = useState<ExportScope>('view');
   const [exporting, setExporting] = useState('');
@@ -94,6 +111,7 @@ export function TimetablePreview({
   const lockedCount = scheduledSessions.filter((session) => session.locked).length;
   const current = versions.find((version) => version.id === timetableId);
   const title = viewTitle(view, names);
+  const editingSession = scheduledSessions.find((session) => session.id === editing);
   const codes = codesBySubject;
 
   // In a teacher or room view, shade the cells where that teacher or room is unavailable.
@@ -208,13 +226,43 @@ export function TimetablePreview({
         </ul>
       )}
 
-      <div className="action-row no-print">
+      <div className="action-row no-print generate-row">
+        <label className="mini wide">
+          Style
+          <select value={generateStyle} onChange={(e) => onStyleChange(e.target.value as VariantStyle)} disabled={busy}>
+            {VARIANT_STYLES.map((style) => (
+              <option key={style.id} value={style.id}>
+                {style.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="button" className="primary" onClick={onGenerate} disabled={busy || problems.length > 0}>
           {busy
             ? 'Working…'
             : scheduledSessions.length
               ? `Regenerate${lockedCount ? ` (keep ${lockedCount} locked)` : ''}`
               : 'Generate timetable'}
+        </button>
+        {scheduledSessions.length > 0 && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={onGenerateAlternative}
+            disabled={busy || problems.length > 0}
+            title="Same rules and style, a different valid week"
+          >
+            Try another version
+          </button>
+        )}
+        <button
+          type="button"
+          className={showVariants ? 'secondary accent' : 'secondary'}
+          onClick={() => setShowVariants(!showVariants)}
+          disabled={problems.length > 0}
+          aria-expanded={showVariants}
+        >
+          Variations…
         </button>
         {current && (
           <button
@@ -228,6 +276,50 @@ export function TimetablePreview({
           </button>
         )}
       </div>
+
+      {showVariants && (
+        <div className="variant-picker no-print">
+          <p className="small">
+            Build several versions at once, each with a different priority, then compare them. The hard rules are the same
+            for all of them.
+          </p>
+          <div className="variant-grid">
+            {VARIANT_STYLES.map((style) => {
+              const on = variantStyles.includes(style.id);
+              return (
+                <button
+                  key={style.id}
+                  type="button"
+                  className={`variant-card ${on ? 'active' : ''}`}
+                  aria-pressed={on}
+                  onClick={() =>
+                    setVariantStyles(on ? variantStyles.filter((item) => item !== style.id) : [...variantStyles, style.id])
+                  }
+                >
+                  <strong>
+                    {on ? '✓ ' : ''}
+                    {style.label}
+                  </strong>
+                  <span>{style.description}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="action-row compact">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                onGenerateVariants(VARIANT_STYLES.map((style) => style.id).filter((id) => variantStyles.includes(id)));
+                setShowVariants(false);
+              }}
+              disabled={busy || !variantStyles.length}
+            >
+              Build {variantStyles.length} variation{variantStyles.length === 1 ? '' : 's'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {versions.length > 0 && (
         <div className="version-bar no-print">
@@ -332,7 +424,69 @@ export function TimetablePreview({
         </div>
       )}
 
-      <div className="timetable-scroll">
+      {compactScreen && scheduledSessions.length > 0 && (
+        <div className="day-view">
+          <div className="day-tabs" role="tablist">
+            {days.map((day, index) => (
+              <button
+                key={day}
+                type="button"
+                role="tab"
+                aria-selected={mobileDay === index}
+                className={mobileDay === index ? 'active' : ''}
+                onClick={() => setMobileDay(index)}
+              >
+                {day.slice(0, 3)}
+              </button>
+            ))}
+          </div>
+          {slots.map((slot, index) => {
+            const day = days[Math.min(mobileDay, days.length - 1)];
+            const here = (grid[day]?.[slot] ?? []).filter((session) => session.slot === slot);
+            return (
+              <Fragment key={slot}>
+                <div className="day-slot">
+                  <div className="day-slot-time">
+                    <strong>P{index + 1}</strong>
+                    <span>{slot.split('-')[0]}</span>
+                  </div>
+                  <div className="day-slot-cards">
+                    {here.length === 0 && <span className="muted small">Free</span>}
+                    {here.map((session) => (
+                      <button
+                        key={session.id}
+                        type="button"
+                        className={`session-card ${session.kind === 'lab' ? 'lab' : ''} ${conflicted.has(session.id) ? 'conflict' : ''}`}
+                        onClick={() => setEditing(session.id)}
+                      >
+                        <strong>
+                          {session.locked ? '🔒 ' : ''}
+                          {names[session.subject_id]}
+                          {session.batch ? ` (${session.batch})` : ''}
+                        </strong>
+                        <span>
+                          {[
+                            viewKind !== 'division' && viewKind !== 'batch' ? names[session.division_id] : null,
+                            viewKind !== 'teacher' ? names[session.teacher_id] : null,
+                            viewKind !== 'room' ? names[session.room_id] : null,
+                            session.duration_slots > 1 ? `${session.duration_slots} periods` : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {breaks.has(index) && <div className="timeline-break">Break</div>}
+              </Fragment>
+            );
+          })}
+          <p className="hint">Tap a session to move it, change its room or lock it.</p>
+        </div>
+      )}
+
+      <div className={`timetable-scroll ${compactScreen && scheduledSessions.length > 0 ? 'desktop-only' : ''}`}>
         <table className="timetable-grid">
           <thead>
             <tr>
@@ -375,6 +529,8 @@ export function TimetablePreview({
                               className={`session-card ${session.kind === 'lab' ? 'lab' : ''} ${hasConflict ? 'conflict' : ''} ${continued ? 'continued' : ''}`}
                               title={continued ? 'Continues from the slot above' : 'Drag to move · double-click to lock or unlock'}
                               onDoubleClick={() => onSessionUpdate(session.id, { locked: !session.locked })}
+                              onKeyDown={(event) => event.key === 'Enter' && setEditing(session.id)}
+                              tabIndex={continued ? -1 : 0}
                             >
                               {hasConflict && <div className="conflict-badge">!</div>}
                               <strong>
@@ -496,6 +652,21 @@ export function TimetablePreview({
         </div>
       )}
     </section>
+
+    <VariantCompare versions={versions} currentId={timetableId} days={days} slots={slots} onSelect={onSelectVersion} />
+
+    {editingSession && (
+      <SessionSheet
+        session={editingSession}
+        days={days}
+        slots={slots}
+        rooms={rooms}
+        names={names}
+        conflicts={conflicts}
+        onChange={(patch) => onSessionUpdate(editingSession.id, patch)}
+        onClose={() => setEditing(null)}
+      />
+    )}
     </div>
   );
 }

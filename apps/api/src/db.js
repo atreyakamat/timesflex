@@ -138,6 +138,16 @@ export const createPgStore = async (connectionString) => {
     async deleteSession(tokenHash) {
       await pool.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
     },
+    /** Removes the account with its sessions, institutions and their timetables. */
+    async deleteAccount(id) {
+      await pool.query(
+        'DELETE FROM timetables WHERE institution_id IN (SELECT id FROM institutions WHERE owner_id = $1)',
+        [id],
+      );
+      await pool.query('DELETE FROM institutions WHERE owner_id = $1', [id]);
+      const result = await pool.query('DELETE FROM accounts WHERE id = $1', [id]);
+      return result.rowCount > 0;
+    },
     async listInstitutions(ownerId) {
       const result = await pool.query('SELECT * FROM institutions WHERE owner_id = $1 ORDER BY updated_at DESC', [ownerId]);
       return result.rows.map(toInstitution);
@@ -243,6 +253,17 @@ export const createFileStore = async (filePath) => {
     async deleteSession(tokenHash) {
       state.sessions = state.sessions.filter((item) => item.tokenHash !== tokenHash);
       await persist();
+    },
+    /** Removes the account with its sessions, institutions and their timetables. */
+    async deleteAccount(id) {
+      const before = state.accounts.length;
+      const owned = new Set(state.institutions.filter((item) => item.ownerId === id).map((item) => item.id));
+      state.timetables = state.timetables.filter((item) => !owned.has(item.institutionId));
+      state.institutions = state.institutions.filter((item) => item.ownerId !== id);
+      state.sessions = state.sessions.filter((item) => item.accountId !== id);
+      state.accounts = state.accounts.filter((item) => item.id !== id);
+      await persist();
+      return state.accounts.length < before;
     },
     async listInstitutions(ownerId) {
       return clone(

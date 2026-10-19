@@ -192,3 +192,57 @@ def test_difficult_subjects_are_spread_across_days():
     result = solve_timetable(SolverRequest(days=DAYS, slots=SLOTS, sessions=sessions))
     heavy_per_day = Counter(item.day for item in result.scheduled if item.difficult)
     assert max(heavy_per_day.values()) == 2
+
+
+def _department(style="balanced", seed=None):
+    """Two classes, four teachers, 15 lectures each: enough room for styles to differ."""
+    sessions = []
+    for division in ("A", "B"):
+        for subject, teacher, count in (("math", "t1", 4), ("phys", "t2", 4), ("chem", "t3", 4), ("bio", "t4", 3)):
+            sessions += [
+                session(f"{division}-{subject}-{i}", subject=subject, teacher=teacher, room=f"r{division}", division=division)
+                for i in range(count)
+            ]
+    limits = [TeacherConstraint(teacher_id=t, max_lectures_per_day=4, max_lectures_per_week=20) for t in ("t1", "t2", "t3", "t4")]
+    return SolverRequest(
+        days=DAYS, slots=SLOTS, sessions=sessions, teacher_constraints=limits, style=style, seed=seed, time_limit_seconds=5
+    )
+
+
+def _teacher_days(scheduled):
+    return sum(len({item.day for item in scheduled if item.teacher_id == t}) for t in ("t1", "t2", "t3", "t4"))
+
+
+def test_every_style_places_everything_without_clashes():
+    for style in ("balanced", "compact", "spread", "teacher_days", "late_start"):
+        result = solve_timetable(_department(style))
+        assert not result.unscheduled, style
+        assert_no_overlaps(result.scheduled)
+
+
+def test_styles_change_the_week_in_their_direction():
+    balanced = solve_timetable(_department("balanced")).scheduled
+    compact = solve_timetable(_department("compact")).scheduled
+    late_start = solve_timetable(_department("late_start")).scheduled
+    teacher_days = solve_timetable(_department("teacher_days")).scheduled
+
+    # Compact days end earlier: the average start slot is no later than balanced.
+    mean = lambda items: sum(SLOTS.index(item.slot) for item in items) / len(items)
+    assert mean(compact) <= mean(balanced)
+    # Late start keeps the first period free (30 lectures fit in 5 days x 5 later periods per class).
+    assert not [item for item in late_start if item.slot == SLOTS[0]]
+    # Fewer teacher days: teachers come in on fewer days in total.
+    assert _teacher_days(teacher_days) < _teacher_days(balanced)
+
+
+def test_seed_gives_a_different_valid_week():
+    first = solve_timetable(_department(seed=1)).scheduled
+    second = solve_timetable(_department(seed=2)).scheduled
+    assert len(first) == len(second) == 30
+    placement = lambda items: {(item.id, item.day, item.slot) for item in items}
+    assert placement(first) != placement(second)
+
+
+def test_unknown_style_falls_back_to_balanced():
+    result = solve_timetable(_department("no-such-style"))
+    assert not result.unscheduled

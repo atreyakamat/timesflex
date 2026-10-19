@@ -123,3 +123,39 @@ test('data routes need a session and only reach your own institution', async () 
   assert.equal(solved.status, 200);
   assert.equal(solved.body.timetable.status, 'generated');
 });
+
+test('operations have their own endpoint and profile saves never roll them back', async () => {
+  const { token, institution } = (await signup('ops@three.edu', 'Three')).body;
+  const ops = {
+    absences: [{ id: 'a1', date: '2026-10-19', teacherId: 't1' }],
+    substitutions: [{ id: 's1', date: '2026-10-19', sessionId: 'x', absentTeacherId: 't1', substituteTeacherId: 't2' }],
+    attendance: [],
+  };
+  const saved = await call('PUT', `/api/institutions/${institution.id}/operations`, { token, body: ops });
+  assert.equal(saved.status, 200);
+
+  // A stale profile save (older operations) from another device keeps the newer operations.
+  const stale = { institution: { name: 'Three' }, operations: { absences: [], substitutions: [], attendance: [] } };
+  await call('PUT', `/api/institutions/${institution.id}`, { token, body: { name: 'Three', type: 'college', profile: stale } });
+  const after = await call('GET', `/api/institutions/${institution.id}`, { token });
+  assert.equal(after.body.data.operations.absences.length, 1);
+  assert.equal(after.body.data.operations.substitutions[0].substituteTeacherId, 't2');
+
+  const bad = await call('PUT', `/api/institutions/${institution.id}/operations`, { token, body: { absences: 'nope' } });
+  assert.equal(bad.status, 400);
+  const other = (await signup('ops@four.edu', 'Four')).body;
+  const foreign = await call('PUT', `/api/institutions/${institution.id}/operations`, { token: other.token, body: ops });
+  assert.equal(foreign.status, 404);
+});
+
+test('deleting an account needs the password and removes everything it owns', async () => {
+  const { token, institution } = (await signup('leaving@five.edu', 'Five')).body;
+  const wrong = await call('DELETE', '/api/auth/account', { token, body: { password: 'not it' } });
+  assert.equal(wrong.status, 403);
+  const gone = await call('DELETE', '/api/auth/account', { token, body: { password: 'correct horse' } });
+  assert.equal(gone.status, 200);
+  assert.equal((await call('GET', '/api/auth/me', { token })).status, 401);
+  assert.equal(await store.getInstitution(institution.id), null);
+  const again = await call('POST', '/api/auth/login', { body: { email: 'leaving@five.edu', password: 'correct horse' } });
+  assert.equal(again.status, 401);
+});

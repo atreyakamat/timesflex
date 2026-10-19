@@ -186,6 +186,10 @@ export interface SolverRequest {
   teacher_constraints: TeacherConstraint[];
   rooms: SolverRoom[];
   names: Record<string, string>;
+  /** Soft-preference style (see variants.ts); the solver defaults to balanced. */
+  style?: string;
+  /** Same style, different seed: another valid week. */
+  seed?: number;
 }
 
 export interface ScheduledSession extends SessionRequest {

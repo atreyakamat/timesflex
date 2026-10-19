@@ -76,6 +76,48 @@ export const effectiveTeacher = (session: ScheduledSession, date: string, substi
 export const absentTeacherIds = (ops: OperationsData, date: string) =>
   new Set(ops.absences.filter((item) => item.date === date).map((item) => item.teacherId));
 
+/** Date keys from `from` to `to` inclusive, limited to working days. At most 60 days. */
+export const workingDatesBetween = (from: string, to: string, days: string[]) => {
+  const result: string[] = [];
+  const [y, m, d] = from.split('-').map(Number);
+  const cursor = new Date(y, m - 1, d);
+  for (let i = 0; i < 60; i += 1) {
+    const key = toDateKey(cursor);
+    if (key > to) break;
+    if (!days.length || days.includes(weekdayOf(key))) result.push(key);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return result;
+};
+
+/** Mark a teacher absent on every working day from `from` to `to` (leave), with an optional reason. */
+export const setLeave = (
+  ops: OperationsData,
+  { teacherId, from, to, days, reason }: { teacherId: string; from: string; to: string; days: string[]; reason?: string },
+): OperationsData => {
+  const dates = new Set(workingDatesBetween(from, to < from ? from : to, days));
+  const others = ops.absences.filter((item) => !(item.teacherId === teacherId && dates.has(item.date)));
+  return {
+    ...ops,
+    absences: [
+      ...others,
+      ...[...dates].map((date) => ({ id: createId(), date, teacherId, ...(reason?.trim() ? { reason: reason.trim() } : {}) })),
+    ],
+  };
+};
+
+/** How many periods each teacher has covered in the 30 days up to `date`. */
+export const recentCoverCounts = (ops: OperationsData, date: string) => {
+  const [y, m, d] = date.split('-').map(Number);
+  const since = toDateKey(new Date(y, m - 1, d - 30));
+  const counts = new Map<string, number>();
+  for (const item of ops.substitutions) {
+    if (!item.substituteTeacherId || item.date < since || item.date > date) continue;
+    counts.set(item.substituteTeacherId, (counts.get(item.substituteTeacherId) ?? 0) + 1);
+  }
+  return counts;
+};
+
 export interface SubstituteCandidate {
   teacher: TeacherForm;
   score: number;
@@ -110,6 +152,7 @@ export const substituteCandidates = ({
   const today = sessionsOnDay(sessions, day, slots);
   const need = new Set(coveredSlots(session, slots));
   const subject = subjects.find((item) => item.id === session.subject_id);
+  const covered = recentCoverCounts(ops, date);
 
   const candidates: SubstituteCandidate[] = [];
   for (const teacher of teachers) {
@@ -135,6 +178,12 @@ export const substituteCandidates = ({
     }
     score += Math.max(0, teacher.maxLecturesPerDay - loadToday) / 10;
     reasons.push(loadToday ? `${loadToday} period(s) today` : 'free all day');
+    // Share the extra work: each cover in the last 30 days counts against a teacher.
+    const recent = covered.get(teacher.id) ?? 0;
+    if (recent) {
+      score -= recent * 0.6;
+      reasons.push(`covered ${recent} recently`);
+    }
     candidates.push({ teacher, score, reasons, loadToday });
   }
   return candidates.sort((a, b) => b.score - a.score || a.teacher.name.localeCompare(b.teacher.name));
@@ -154,6 +203,39 @@ export const assignSubstitute = (
       { id: createId(), date, sessionId: session.id, absentTeacherId: session.teacher_id, substituteTeacherId },
     ],
   };
+};
+
+/** Periods on `date` whose teacher is absent and that have no substitute (or free-period decision) yet. */
+export const uncoveredPeriods = (ops: OperationsData, date: string, sessions: ScheduledSession[], slots: string[]) => {
+  const absent = absentTeacherIds(ops, date);
+  return sessionsOnDay(sessions, weekdayOf(date), slots).filter(
+    (session) =>
+      absent.has(session.teacher_id) && !ops.substitutions.some((item) => item.date === date && item.sessionId === session.id),
+  );
+};
+
+/**
+ * Give every uncovered period on `date` its best available substitute, earliest period
+ * first. Each pick is counted before the next, so nobody is double-booked or pushed
+ * past their daily limit. Periods nobody can take are left for a person to decide.
+ */
+export const autoAssignSubstitutes = (
+  ops: OperationsData,
+  context: { date: string; slots: string[]; sessions: ScheduledSession[]; teachers: TeacherForm[]; subjects: SubjectForm[] },
+): { operations: OperationsData; assigned: number; unfilled: ScheduledSession[] } => {
+  let next = ops;
+  let assigned = 0;
+  const unfilled: ScheduledSession[] = [];
+  for (const session of uncoveredPeriods(ops, context.date, context.sessions, context.slots)) {
+    const [best] = substituteCandidates({ ...context, session, ops: next });
+    if (!best) {
+      unfilled.push(session);
+      continue;
+    }
+    next = assignSubstitute(next, { date: context.date, session, substituteTeacherId: best.teacher.id });
+    assigned += 1;
+  }
+  return { operations: next, assigned, unfilled };
 };
 
 /** Mark a teacher absent or present on a date. Marking present also drops their substitutions. */

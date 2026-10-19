@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FluidBackground } from './FluidBackground';
 
-export type StartMode = 'teachers' | 'ai' | 'sample';
+export type StartMode = 'guided' | 'ai' | 'sample';
 
 interface WelcomeProps {
   personName: string;
@@ -11,10 +11,10 @@ interface WelcomeProps {
 
 const modes: { id: StartMode; icon: string; title: string; text: string }[] = [
   {
-    id: 'teachers',
-    icon: '☺',
-    title: 'Start with your teachers',
-    text: 'Add each professor once: what they teach and their expertise. Then classes, rooms and subjects.',
+    id: 'guided',
+    icon: '➜',
+    title: 'Guided setup (recommended)',
+    text: 'One simple question at a time: days, periods, classes, teachers, rooms, subjects. About ten minutes.',
   },
   {
     id: 'ai',
@@ -32,7 +32,7 @@ const modes: { id: StartMode; icon: string; title: string; text: string }[] = [
 
 /** First screen after creating an account: pick how to fill the institution. */
 export function Welcome({ personName, institutionName, onStart }: WelcomeProps) {
-  const [mode, setMode] = useState<StartMode>('teachers');
+  const [mode, setMode] = useState<StartMode>('guided');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 

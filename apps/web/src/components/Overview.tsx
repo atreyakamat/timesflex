@@ -37,6 +37,8 @@ interface OverviewProps {
   liveVersion?: TimetableRecord;
   operations: OperationsData;
   onGo: (page: Page) => void;
+  /** Opens the one-question-at-a-time setup. */
+  onGuided?: () => void;
 }
 
 export function Overview({
@@ -54,6 +56,7 @@ export function Overview({
   liveVersion,
   operations,
   onGo,
+  onGuided,
 }: OverviewProps) {
   const hasTimetable = sessions.length > 0;
   const nextStep = steps.find((step) => !step.done);
@@ -104,9 +107,22 @@ export function Overview({
                 ? `Next: ${nextStep.label.toLowerCase()} (${nextStep.hint.toLowerCase()}).`
                 : 'Everything is in place. Generate it.'}
             </p>
-            <button type="button" className="primary large" onClick={() => onGo(nextStep?.id ?? 'timetable')}>
-              {nextStep ? `Continue: ${nextStep.label}` : 'Generate timetable'} →
-            </button>
+            <div className="action-row">
+              {nextStep && onGuided ? (
+                <button type="button" className="primary large glow" onClick={onGuided}>
+                  Continue guided setup →
+                </button>
+              ) : (
+                <button type="button" className="primary large" onClick={() => onGo(nextStep?.id ?? 'timetable')}>
+                  {nextStep ? `Continue: ${nextStep.label}` : 'Generate timetable'} →
+                </button>
+              )}
+              {nextStep && onGuided && (
+                <button type="button" className="secondary large" onClick={() => onGo(nextStep.id)}>
+                  Open {nextStep.label.toLowerCase()}
+                </button>
+              )}
+            </div>
           </div>
           <ol className="checklist">
             {steps.map((step) => (

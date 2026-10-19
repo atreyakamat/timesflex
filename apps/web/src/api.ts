@@ -3,6 +3,7 @@ import type {
   AiStatus,
   InstitutionRecord,
   InstitutionType,
+  OperationsData,
   ParseResult,
   SolverRequest,
   SolverResult,
@@ -181,4 +182,18 @@ export const updateTimetable = async (
     method: 'PUT',
     body: JSON.stringify(changes),
   });
+};
+
+/** Day-to-day records (absences, substitutions, attendance) save separately from the profile. */
+export const saveOperations = async (institutionId: string, operations: OperationsData): Promise<OperationsData> => {
+  return requestJson(`/api/institutions/${institutionId}/operations`, {
+    method: 'PUT',
+    body: JSON.stringify(operations),
+  });
+};
+
+/** Permanently deletes the account and its institution. Needs the password again. */
+export const deleteAccount = async (password: string) => {
+  await requestJson('/api/auth/account', { method: 'DELETE', body: JSON.stringify({ password }) });
+  setToken(null);
 };

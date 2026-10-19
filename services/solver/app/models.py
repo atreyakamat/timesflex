@@ -57,6 +57,10 @@ class SolverRequest(BaseModel):
     # Optional id -> display name map, used only to make diagnostics readable.
     names: dict[str, str] = Field(default_factory=dict)
     time_limit_seconds: float = Field(default=10.0, gt=0, le=120)
+    # Soft-preference style: balanced, compact, spread, teacher_days or late_start (see solver.STYLES).
+    style: str = "balanced"
+    # Optional: the same style with a different seed gives a different, equally valid week.
+    seed: int | None = Field(default=None, ge=0)
 
 
 class ScheduledSession(BaseModel):

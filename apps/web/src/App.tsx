@@ -3,9 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createTimetable,
   currentSession,
+  deleteAccount,
   hasSession,
   listTimetables,
   setUnauthorizedHandler,
+  saveOperations,
   signOut,
   solveTimetable,
   updateInstitution,
@@ -29,9 +31,11 @@ import { TeacherSetup } from './components/TeacherSetup';
 import { ThemeToggle } from './components/ThemeToggle';
 import { TimetablePreview } from './components/TimetablePreview';
 import { Today } from './components/Today';
+import { SetupWizard } from './components/SetupWizard';
 import { Welcome, type StartMode } from './components/Welcome';
 import { emptyOperations } from './ops';
 import { sampleProfile, type ProfileData } from './samples';
+import { styleLabel, type VariantStyle } from './variants';
 import { useTheme } from './theme';
 import type {
   Account,
@@ -105,7 +109,7 @@ const dailyTools: { id: Page; label: string; icon: string }[] = [
 ];
 
 type SaveState = 'saved' | 'saving' | 'dirty' | 'error';
-type Screen = 'checking' | 'landing' | 'signup' | 'login' | 'welcome' | 'editor';
+type Screen = 'checking' | 'landing' | 'signup' | 'login' | 'welcome' | 'wizard' | 'editor';
 
 const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
@@ -115,6 +119,10 @@ export function App() {
   const [account, setAccount] = useState<Account | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [accountMenu, setAccountMenu] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [generateStyle, setGenerateStyle] = useState<VariantStyle>('balanced');
   const [page, setPage] = useState<Page>('overview');
   const [menuOpen, setMenuOpen] = useState(false);
   const [institution, setInstitution] = useState(initialInstitution);
@@ -138,6 +146,8 @@ export function App() {
   const hydrated = useRef(false);
   // Set when a freshly applied profile (the sample) must be saved even though it was just loaded.
   const saveAfterLoad = useRef(false);
+  // True once the user changes absences, substitutions or attendance; loading them is not a change.
+  const opsDirty = useRef(false);
 
   const go = (next: Page) => {
     setPage(next);
@@ -156,6 +166,7 @@ export function App() {
     setRooms(profile.rooms || []);
     setSubjects(profile.subjects || []);
     setOperations({ ...emptyOperations(), ...(profile.operations ?? {}) });
+    opsDirty.current = false;
     setVersions([]);
     setTimetableId(null);
     setScheduledSessions([]);
@@ -196,11 +207,28 @@ export function App() {
       setStatusMessage('Sample department loaded. Press Generate to build its timetable.');
       return;
     }
+    if (mode === 'guided') {
+      setScreen('wizard');
+      return;
+    }
     setScreen('editor');
-    go(mode === 'ai' ? 'quick' : 'teachers');
-    setStatusMessage(
-      mode === 'ai' ? 'Describe your department in plain words.' : 'Add your first teacher. Each one gets a profile.',
-    );
+    go('quick');
+    setStatusMessage('Describe your department in plain words.');
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteError('');
+    try {
+      await deleteAccount(deletePassword);
+      setDeleting(false);
+      setDeletePassword('');
+      setAccount(null);
+      setInstitutionId(null);
+      applyProfile({});
+      setScreen('landing');
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete the account.');
+    }
   };
 
   const openSession = async (session: AccountSession, isNew: boolean) => {
@@ -397,7 +425,7 @@ export function App() {
     }, 900);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [institution, department, divisions, teachers, rooms, subjects, operations]);
+  }, [institution, department, divisions, teachers, rooms, subjects]);
 
   // Autosave hand edits to the open timetable version.
   useEffect(() => {
@@ -417,47 +445,110 @@ export function App() {
     return () => clearTimeout(timer);
   }, [scheduledSessions, sessionsDirty, timetableId]);
 
-  const handleGenerate = async () => {
+  // Autosave day-to-day records on their own endpoint, so they never race profile edits.
+  useEffect(() => {
+    if (!institutionId || !opsDirty.current) return;
+    setSaveState('dirty');
+    const timer = setTimeout(() => {
+      setSaveState('saving');
+      saveOperations(institutionId, operations)
+        .then(() => {
+          opsDirty.current = false;
+          setSaveState('saved');
+        })
+        .catch(() => setSaveState('error'));
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [operations, institutionId]);
+
+  const changeOperations = (next: OperationsData) => {
+    opsDirty.current = true;
+    setOperations(next);
+  };
+
+  /** One solve: a new version in the given style. Returns the result line, or throws. */
+  const solveVersion = async (resolvedInstitutionId: string, style: VariantStyle, number: number, seed?: number) => {
+    const locked = scheduledSessions.filter((session) => session.locked);
+    const request = buildSolverRequest({
+      days: institution.workingDays,
+      slots,
+      divisions,
+      teachers,
+      rooms,
+      subjects,
+      locked,
+      style,
+      seed,
+    });
+    const timetableRecord = await createTimetable(resolvedInstitutionId, {
+      label: `Version ${number} · ${styleLabel(style)}${seed !== undefined ? ' (alt)' : ''}`,
+      request,
+    });
+    const solved = await solveTimetable(timetableRecord.id);
+    return { solved, locked, request };
+  };
+
+  const handleGenerate = async (style: VariantStyle = generateStyle, alternative = false): Promise<string> => {
     if (problems.length) {
       setStatusMessage('Fix the setup issues listed above first.');
-      return;
+      return 'Fix the setup issues first.';
     }
     setBusy(true);
     try {
       setStatusMessage('Saving your setup...');
       const resolvedInstitutionId = await saveProfile();
-
-      const locked = scheduledSessions.filter((session) => session.locked);
-      const request = buildSolverRequest({
-        days: institution.workingDays,
-        slots,
-        divisions,
-        teachers,
-        rooms,
-        subjects,
-        locked,
-      });
-
-      const timetableRecord = await createTimetable(resolvedInstitutionId, {
-        label: `Version ${versions.length + 1}`,
-        request,
-      });
-      setTimetableId(timetableRecord.id);
-
-      setStatusMessage(`Solving ${request.sessions.length} sessions...`);
-      const solved = await solveTimetable(timetableRecord.id);
+      setStatusMessage('Building your timetable...');
+      const { solved, locked } = await solveVersion(
+        resolvedInstitutionId,
+        style,
+        versions.length + 1,
+        alternative ? Math.floor(Math.random() * 100000) : undefined,
+      );
+      setTimetableId(solved.timetable.id);
       setScheduledSessions(solved.solver.scheduled_sessions);
       setSessionsDirty(false);
       setUnscheduledSessions(solved.solver.unscheduled_sessions);
       setDiagnostics(solved.solver.diagnostics ?? []);
-      setVersions([solved.timetable, ...versions]);
-      setStatusMessage(
+      setVersions((list) => [solved.timetable, ...list]);
+      const message =
         solved.solver.status === 'ok'
           ? `All ${solved.solver.scheduled_sessions.length} sessions placed${locked.length ? ` (${locked.length} locked kept)` : ''}.`
-          : `Placed ${solved.solver.scheduled_sessions.length}, could not place ${solved.solver.unscheduled_sessions.length}. See the notes below the grid.`,
-      );
+          : `Placed ${solved.solver.scheduled_sessions.length}, could not place ${solved.solver.unscheduled_sessions.length}. See the notes below the grid.`;
+      setStatusMessage(message);
+      return message;
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Failed to generate timetable.');
+      const message = error instanceof Error ? error.message : 'Failed to generate timetable.';
+      setStatusMessage(message);
+      return message;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Solve once per style, one after another, so they can be compared side by side. */
+  const handleGenerateVariants = async (styles: VariantStyle[]) => {
+    if (problems.length || !styles.length) return;
+    setBusy(true);
+    try {
+      const resolvedInstitutionId = await saveProfile();
+      const created: TimetableRecord[] = [];
+      let number = versions.length;
+      for (const [index, style] of styles.entries()) {
+        setStatusMessage(`Building variation ${index + 1} of ${styles.length}: ${styleLabel(style)}...`);
+        number += 1;
+        const { solved } = await solveVersion(resolvedInstitutionId, style, number);
+        created.unshift(solved.timetable);
+      }
+      setVersions((list) => [...created, ...list]);
+      const first = created[created.length - 1];
+      setTimetableId(first.id);
+      setScheduledSessions(first.generatedSessions);
+      setSessionsDirty(false);
+      setUnscheduledSessions([]);
+      setDiagnostics([]);
+      setStatusMessage(`${created.length} variations ready. Compare them below and keep the one you like.`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Failed to generate variations.');
     } finally {
       setBusy(false);
     }
@@ -530,6 +621,32 @@ export function App() {
         onModeChange={setScreen}
         onBack={() => setScreen('landing')}
         onSignedIn={openSession}
+      />
+    );
+  }
+
+  if (screen === 'wizard') {
+    return (
+      <SetupWizard
+        institution={institution}
+        department={department}
+        divisions={divisions}
+        teachers={teachers}
+        rooms={rooms}
+        subjects={subjects}
+        problems={problems}
+        busy={busy}
+        onInstitution={setInstitution}
+        onDepartment={setDepartment}
+        onDivisions={setDivisions}
+        onTeachers={setTeachers}
+        onRooms={setRooms}
+        onSubjects={setSubjects}
+        onGenerate={() => handleGenerate()}
+        onExit={(target) => {
+          setScreen('editor');
+          go(target);
+        }}
       />
     );
   }
@@ -611,6 +728,13 @@ export function App() {
           <div className="nav-progress">
             <div style={{ width: `${(doneCount / coreSteps.length) * 100}%` }} />
           </div>
+          <button type="button" className="nav-item guided" onClick={() => setScreen('wizard')}>
+            <span className="nav-icon">➜</span>
+            <span className="nav-label">
+              Guided setup
+              <small>One question at a time</small>
+            </span>
+          </button>
           {setupSteps.map((step, index) => (
             <button
               key={step.id}
@@ -661,6 +785,39 @@ export function App() {
               <button type="button" className="ghost small" onClick={handleSignOut}>
                 Sign out
               </button>
+              {!deleting ? (
+                <button type="button" className="ghost small danger-text" onClick={() => setDeleting(true)}>
+                  Delete account…
+                </button>
+              ) : (
+                <div className="delete-box">
+                  <span className="small">This deletes the institution and all its data. Enter your password to confirm.</span>
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={deletePassword}
+                    onChange={(e) => setDeletePassword(e.target.value)}
+                    aria-label="Password"
+                  />
+                  {deleteError && <span className="text-danger small">{deleteError}</span>}
+                  <div className="action-row compact">
+                    <button type="button" className="danger small" onClick={handleDeleteAccount} disabled={!deletePassword}>
+                      Delete forever
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={() => {
+                        setDeleting(false);
+                        setDeletePassword('');
+                        setDeleteError('');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           <button type="button" className="account-chip" onClick={() => setAccountMenu(!accountMenu)} aria-expanded={accountMenu}>
@@ -710,6 +867,7 @@ export function App() {
               liveVersion={liveVersion}
               operations={operations}
               onGo={go}
+              onGuided={() => setScreen('wizard')}
             />
           )}
 
@@ -793,7 +951,11 @@ export function App() {
               conflicts={conflicts}
               versions={versions}
               timetableId={timetableId}
-              onGenerate={handleGenerate}
+              onGenerate={() => handleGenerate()}
+              onGenerateAlternative={() => handleGenerate(generateStyle, true)}
+              onGenerateVariants={handleGenerateVariants}
+              generateStyle={generateStyle}
+              onStyleChange={setGenerateStyle}
               onSessionUpdate={handleSessionUpdate}
               onSelectVersion={handleSelectVersion}
               onSetStatus={handleSetStatus}
@@ -806,13 +968,13 @@ export function App() {
           )}
 
           {page === 'substitutions' && (
-            <Substitutions {...shared} sessions={liveSessions} operations={operations} onChange={setOperations} />
+            <Substitutions {...shared} sessions={liveSessions} operations={operations} onChange={changeOperations} />
           )}
 
           {page === 'free-rooms' && <FreeRooms {...shared} sessions={liveSessions} />}
 
           {page === 'attendance' && (
-            <Attendance {...shared} sessions={liveSessions} operations={operations} onChange={setOperations} onGo={go} />
+            <Attendance {...shared} sessions={liveSessions} operations={operations} onChange={changeOperations} onGo={go} />
           )}
 
           {page === 'people' && (
@@ -849,6 +1011,33 @@ export function App() {
           )}
         </main>
       </div>
+
+      <nav className="tabbar glass" aria-label="Main">
+        {(
+          [
+            ['overview', '⌂', 'Home'],
+            ['timetable', '▦', 'Timetable'],
+            ['today', '◷', 'Today'],
+            ['substitutions', '⇄', 'Cover'],
+            ['people', '☺', 'People'],
+          ] as [Page, string, string][]
+        ).map(([id, icon, label]) => {
+          const locked = (id === 'today' || id === 'substitutions') && !hasTimetable;
+          return (
+            <button
+              key={id}
+              type="button"
+              className={page === id ? 'active' : ''}
+              onClick={() => go(id)}
+              disabled={locked}
+              aria-current={page === id ? 'page' : undefined}
+            >
+              <span>{icon}</span>
+              {label}
+            </button>
+          );
+        })}
+      </nav>
       {profileTeacher && (
         <TeacherProfile
           teacher={profileTeacher}

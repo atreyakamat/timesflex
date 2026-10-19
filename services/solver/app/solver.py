@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -11,12 +12,34 @@ from .models import Room, ScheduledSession, SessionRequest, SolverRequest, TimeR
 # so a feasible placement is never traded away for a "nicer" timetable.
 PLACE_WEIGHT = 1000
 LOCKED_PLACE_WEIGHT = 10 * PLACE_WEIGHT
-SAME_DAY_REPEAT_PENALTY = 30
-DIFFICULT_PEAK_PENALTY = 12
-DIVISION_PEAK_PENALTY = 8
-TEACHER_PEAK_PENALTY = 5
-PREFERENCE_MISS_PENALTY = 4
-LATE_SLOT_PENALTY = 1
+
+
+@dataclass(frozen=True)
+class Style:
+    """Soft-preference weights. Every style keeps the same hard rules; only the trade-offs change."""
+
+    repeat: int = 30  # same subject twice in a day for one class
+    difficult_peak: int = 12  # heavy subjects piling up on one day
+    division_peak: int = 8  # a class's busiest day
+    teacher_peak: int = 5  # a teacher's busiest day
+    preference: int = 4  # per slot outside a teacher's preferred slots
+    late: int = 1  # per slot index: later periods cost more
+    teacher_day: int = 0  # per day a teacher has to come in
+    first_period: int = 0  # anything in the first period of the day
+
+
+STYLES: dict[str, Style] = {
+    # The default: subjects spread out, days and teachers evenly loaded, mornings preferred.
+    "balanced": Style(),
+    # Pull everything towards the morning so days finish early.
+    "compact": Style(late=6, division_peak=3, teacher_peak=2),
+    # Same number of periods every day, for classes and teachers alike.
+    "spread": Style(late=0, division_peak=24, teacher_peak=14),
+    # Group each teacher's periods onto as few days as possible.
+    "teacher_days": Style(teacher_day=40, teacher_peak=0, division_peak=4),
+    # Keep the first period free wherever the week allows it.
+    "late_start": Style(first_period=30, late=0),
+}
 
 WHOLE_DIVISION = "__all__"
 
@@ -188,6 +211,9 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
         result.unscheduled = list(request.sessions)
         return result
 
+    style = STYLES.get(request.style, STYLES["balanced"])
+    # A seed adds small, repeatable noise to every placement so the same style can give a different week.
+    rng = random.Random(request.seed) if request.seed is not None else None
     breaks = _breaks_after(slots)
     day_index = {day: i for i, day in enumerate(days)}
     slot_index = {slot: i for i, slot in enumerate(slots)}
@@ -222,6 +248,7 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
     placed: dict[int, cp_model.IntVar] = {}
     occupancy: dict[tuple, list[cp_model.IntVar]] = defaultdict(list)
     teacher_day_load: dict[tuple[str, int], list] = defaultdict(list)
+    teacher_day_vars: dict[tuple[str, int], list] = defaultdict(list)
     group_day_load: dict[tuple[str, str, int], list] = defaultdict(list)
     difficult_day_count: dict[tuple[str, str, int], list] = defaultdict(list)
     subject_day_count: dict[tuple[str, str, str, int], list] = defaultdict(list)
@@ -263,13 +290,18 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
                 for group in groups:
                     occupancy[("group", session.division_id, group, d, covered)].append(var)
             teacher_day_load[(session.teacher_id, d)].append(var * session.duration_slots)
+            teacher_day_vars[(session.teacher_id, d)].append(var)
             for group in groups:
                 group_day_load[(session.division_id, group, d)].append(var * session.duration_slots)
                 subject_day_count[(session.division_id, group, session.subject_id, d)].append(var)
                 if session.difficult:
                     difficult_day_count[(session.division_id, group, d)].append(var)
             misses = sum(1 for i in span(session, t) if preferred and (d, i) not in preferred)
-            soft_terms.append(var * (LATE_SLOT_PENALTY * t + PREFERENCE_MISS_PENALTY * misses))
+            cost = style.late * t + style.preference * misses + (style.first_period if t == 0 else 0)
+            if rng is not None:
+                cost += rng.randint(0, 6)
+            if cost:
+                soft_terms.append(var * cost)
 
         placed[s] = model.NewBoolVar(f"placed{s}")
         model.Add(sum(starts[s].values()) == placed[s])
@@ -296,9 +328,11 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
         if len(variables) > 1:
             excess = model.NewIntVar(0, len(variables), "")
             model.Add(excess >= sum(variables) - 1)
-            penalties.append(SAME_DAY_REPEAT_PENALTY * excess)
+            penalties.append(style.repeat * excess)
 
     def peak(loads: dict, key_of, weight: int):
+        if not weight:
+            return
         grouped: dict = defaultdict(list)
         for key, terms in loads.items():
             grouped[key_of(key)].append(terms)
@@ -308,9 +342,17 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
                 model.Add(top >= sum(terms))
             penalties.append(weight * top)
 
-    peak(group_day_load, lambda key: key[:2], DIVISION_PEAK_PENALTY)
-    peak(teacher_day_load, lambda key: key[0], TEACHER_PEAK_PENALTY)
-    peak(difficult_day_count, lambda key: key[:2], DIFFICULT_PEAK_PENALTY)
+    peak(group_day_load, lambda key: key[:2], style.division_peak)
+    peak(teacher_day_load, lambda key: key[0], style.teacher_peak)
+    peak(difficult_day_count, lambda key: key[:2], style.difficult_peak)
+
+    # Each day a teacher has to come in costs `teacher_day`.
+    if style.teacher_day:
+        for variables in teacher_day_vars.values():
+            present = model.NewBoolVar("")
+            for var in variables:
+                model.AddImplication(var, present)
+            penalties.append(style.teacher_day * present)
 
     reward = [
         (LOCKED_PLACE_WEIGHT if session.locked else PLACE_WEIGHT) * session.duration_slots * placed[s]

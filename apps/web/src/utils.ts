@@ -154,6 +154,8 @@ export const buildSolverRequest = ({
   rooms,
   subjects,
   locked,
+  style,
+  seed,
 }: {
   days: string[];
   slots: string[];
@@ -162,6 +164,8 @@ export const buildSolverRequest = ({
   rooms: RoomForm[];
   subjects: SubjectForm[];
   locked: ScheduledSession[];
+  style?: string;
+  seed?: number;
 }): SolverRequest => {
   const pinnedCount = new Map<string, number>();
   const sessions: SessionRequest[] = [];
@@ -219,6 +223,8 @@ export const buildSolverRequest = ({
       unavailable: timeRefs(days, slots, room.unavailableDays, room.unavailableSlots),
     })),
     names,
+    ...(style ? { style } : {}),
+    ...(seed !== undefined ? { seed } : {}),
   };
 };
 
