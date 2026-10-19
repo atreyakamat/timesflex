@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from .models import SolverRequest, SolverResponse
 from .solver import solve_timetable
 
-app = FastAPI(title="TimeFlex Solver", version="0.1.0")
+app = FastAPI(title="TimeFlex Solver", version="0.2.0")
 
 
 @app.get("/health")
@@ -13,15 +13,16 @@ def health() -> dict[str, str]:
 
 @app.post("/solve", response_model=SolverResponse)
 def solve(request: SolverRequest) -> SolverResponse:
-    scheduled_sessions, unscheduled_sessions = solve_timetable(request)
+    result = solve_timetable(request)
     return SolverResponse(
-        status="ok" if not unscheduled_sessions else "partial",
-        scheduled_sessions=scheduled_sessions,
-        unscheduled_sessions=unscheduled_sessions,
+        status="ok" if not result.unscheduled else "partial",
+        scheduled_sessions=result.scheduled,
+        unscheduled_sessions=result.unscheduled,
+        diagnostics=result.diagnostics,
     )
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
