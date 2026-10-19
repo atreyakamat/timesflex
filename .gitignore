@@ -11,3 +11,6 @@ __pycache__
 .pytest_cache
 .venv
 *.pyc
+
+# Local file store used when DATABASE_URL is not set
+apps/api/data
