@@ -29,6 +29,13 @@ export type AgentAction =
 /** Actions that need the solver (and a running server) rather than a profile change. */
 export const isRunAction = (action: AgentAction) => action.type === 'generate' || action.type === 'generateVariants';
 
+/** "2026-10-26" -> "Mon 26 Oct". */
+export const niceDate = (key: string) => {
+  const [y, m, d] = key.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()]} ${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]}`;
+};
+
 const name = (profile: ProfileData, id: string) =>
   [...profile.teachers, ...profile.subjects, ...profile.divisions, ...profile.rooms].find((item) => item.id === id)?.name ?? 'someone';
 
@@ -64,9 +71,9 @@ export const describeAction = (action: AgentAction, profile: ProfileData): strin
       return `Change ${name(profile, action.subjectId)}: ${parts.join(', ')}`;
     }
     case 'markAbsent':
-      return `Mark ${name(profile, action.teacherId)} absent on ${action.date}`;
+      return `Mark ${name(profile, action.teacherId)} absent on ${niceDate(action.date)}`;
     case 'leave':
-      return `${name(profile, action.teacherId)} on leave ${action.from === action.to ? `on ${action.from}` : `from ${action.from} to ${action.to}`}${action.reason ? ` (${action.reason})` : ''}`;
+      return `${name(profile, action.teacherId)} on leave ${action.from === action.to ? `on ${niceDate(action.from)}` : `from ${niceDate(action.from)} to ${niceDate(action.to)}`}${action.reason ? ` (${action.reason})` : ''}`;
     case 'setWorkingDays':
       return `Teach on ${action.days.join(', ')}`;
     case 'setHours': {

@@ -192,6 +192,8 @@ export interface SolverRequest {
   seed?: number;
   /** Per-weight overrides, e.g. learned preferences (see learning.ts solverWeights). */
   weights?: Record<string, number>;
+  /** Seconds the solver may search; shorter when building several versions at once. */
+  time_limit_seconds?: number;
 }
 
 export interface ScheduledSession extends SessionRequest {

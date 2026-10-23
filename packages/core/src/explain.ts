@@ -36,6 +36,13 @@ export const canPlace = (session: ScheduledSession, day: string, start: number, 
   const teacher = teachers.find((t) => t.id === session.teacher_id);
   const room = rooms.find((r) => r.id === session.room_id);
   if (span.some((slot) => isBlocked(teacher, day, slot) || isBlocked(room, day, slot))) return false;
+  // The teacher's daily limit counts too, not just clashes.
+  if (teacher) {
+    const loadThatDay = sessions
+      .filter((other) => other.id !== session.id && other.day === day && other.teacher_id === session.teacher_id)
+      .reduce((sum, other) => sum + other.duration_slots, 0);
+    if (loadThatDay + session.duration_slots > teacher.maxLecturesPerDay) return false;
+  }
   return !sessions.some((other) => {
     if (other.id === session.id || other.day !== day) return false;
     const overlap = coveredSlots(other, slots).some((slot) => span.includes(slot));

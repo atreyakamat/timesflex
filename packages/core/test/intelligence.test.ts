@@ -213,3 +213,15 @@ test('model intents are checked against real names before becoming actions', asy
   assert.equal(actionsFromIntent({ intent: 'limit_week', teacher: 'Iyer', number: 12 }, p, MONDAY).actions[0].type, 'updateTeacher');
   assert.equal(actionsFromIntent({ intent: 'unknown' }, p, MONDAY).understood, false);
 });
+
+test('suggested moves respect the teacher daily limit, not just clashes', () => {
+  const limited = (sessions: ScheduledSession[]) => ({
+    ...ctx(sessions),
+    teachers: [{ id: 't1', name: 'Prof. Mehta', maxLecturesPerDay: 2, maxLecturesPerWeek: 20 }],
+  });
+  // Mehta already teaches 2 periods on Tuesday (his daily limit), so Tuesday is never offered.
+  const sessions = [s('mover', {}), s('t-a', { day: 'Tuesday', slot: slots[0] }), s('t-b', { day: 'Tuesday', slot: slots[1] })];
+  const { alternatives } = explainSession(sessions[0], limited(sessions));
+  assert.ok(alternatives.length > 0);
+  assert.ok(alternatives.every((a) => a.day !== 'Tuesday'));
+});
