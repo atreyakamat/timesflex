@@ -25,6 +25,9 @@ try {
 run(venvPython, ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'], solver);
 run(venvPython, ['-m', 'pip', 'install', '--quiet', '-e', '.[dev]'], solver);
 
+// The app (Android, iOS and web) keeps its own node_modules: it needs React 19, the old web app React 18.
+execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: path.join(root, 'apps/mobile'), stdio: 'inherit', shell: isWindows });
+
 const model = process.env.AI_MODEL ?? 'qwen3:0.6b';
 try {
   const response = await fetch('http://127.0.0.1:11434/api/tags', { signal: AbortSignal.timeout(2000) });
@@ -41,4 +44,4 @@ try {
       'Without it, Quick setup falls back to the basic rule parser; everything else works.',
   );
 }
-console.log('\nSetup done. Start everything with:  npm run dev');
+console.log('\nSetup done. Start the server with  npm run dev  and the app with  npm run app');
