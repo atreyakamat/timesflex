@@ -4,3 +4,8 @@ export * from './ops';
 export * from './variants';
 export * from './naming';
 export * from './samples';
+export * from './agent';
+export * from './command';
+export * from './explain';
+export * from './insights';
+export * from './learning';

@@ -156,6 +156,7 @@ export const buildSolverRequest = ({
   locked,
   style,
   seed,
+  weights,
 }: {
   days: string[];
   slots: string[];
@@ -166,6 +167,7 @@ export const buildSolverRequest = ({
   locked: ScheduledSession[];
   style?: string;
   seed?: number;
+  weights?: Record<string, number>;
 }): SolverRequest => {
   const pinnedCount = new Map<string, number>();
   const sessions: SessionRequest[] = [];
@@ -225,6 +227,7 @@ export const buildSolverRequest = ({
     names,
     ...(style ? { style } : {}),
     ...(seed !== undefined ? { seed } : {}),
+    ...(weights ? { weights } : {}),
   };
 };
 

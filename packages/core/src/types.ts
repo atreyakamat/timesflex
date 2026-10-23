@@ -190,6 +190,8 @@ export interface SolverRequest {
   style?: string;
   /** Same style, different seed: another valid week. */
   seed?: number;
+  /** Per-weight overrides, e.g. learned preferences (see learning.ts solverWeights). */
+  weights?: Record<string, number>;
 }
 
 export interface ScheduledSession extends SessionRequest {
