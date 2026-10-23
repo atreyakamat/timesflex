@@ -13,6 +13,6 @@
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm test -w @timesflex/api && npm test -w @timesflex/web && node scripts/pytest.mjs"
+    "test": "npm test -w @timesflex/api && npm test -w @timesflex/core && npm test -w @timesflex/web && node scripts/pytest.mjs"
   }
 }
