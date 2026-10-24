@@ -61,6 +61,8 @@ class SolverRequest(BaseModel):
     style: str = "balanced"
     # Optional: the same style with a different seed gives a different, equally valid week.
     seed: int | None = Field(default=None, ge=0)
+    # Optional per-weight overrides on top of the style, e.g. learned from the coordinator.
+    weights: dict[str, int] | None = None
 
 
 class ScheduledSession(BaseModel):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ortools.sat.python import cp_model
 
@@ -212,6 +212,9 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
         return result
 
     style = STYLES.get(request.style, STYLES["balanced"])
+    if request.weights:
+        known = {key: max(0, int(value)) for key, value in request.weights.items() if key in Style.__dataclass_fields__}
+        style = replace(style, **known)
     # A seed adds small, repeatable noise to every placement so the same style can give a different week.
     rng = random.Random(request.seed) if request.seed is not None else None
     breaks = _breaks_after(slots)
