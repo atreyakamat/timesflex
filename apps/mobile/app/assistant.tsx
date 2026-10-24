@@ -116,11 +116,11 @@ export default function Assistant() {
           <ScrollView ref={scroll} contentContainerStyle={{ padding: space.lg, gap: space.md }} keyboardShouldPersistTaps="handled">
             {messages.map((m) =>
               m.from === 'me' ? (
-                <Gradient key={m.id} style={{ alignSelf: 'flex-end', maxWidth: '85%', borderRadius: 18, borderBottomRightRadius: 6, paddingVertical: 10, paddingHorizontal: 14 }}>
-                  <T color="#fff" style={{ fontWeight: '600' }}>
+                <View key={m.id} style={{ alignSelf: 'flex-end', maxWidth: '85%', backgroundColor: c.primary, borderRadius: 18, borderBottomRightRadius: 6, paddingVertical: 10, paddingHorizontal: 14 }}>
+                  <T color={c.onPrimary} style={{ fontWeight: '600' }}>
                     {m.text}
                   </T>
-                </Gradient>
+                </View>
               ) : (
                 <View key={m.id} style={{ alignSelf: 'flex-start', maxWidth: '92%', gap: 8 }}>
                   <View style={{ backgroundColor: c.glassStrong, borderRadius: 18, borderBottomLeftRadius: 6, paddingVertical: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: c.glassBorder }}>
@@ -172,9 +172,9 @@ export default function Assistant() {
                 style={{ flex: 1, borderWidth: 1, borderColor: c.borderStrong, backgroundColor: c.glassStrong, borderRadius: radius.lg, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: c.text }}
               />
               <Pressable accessibilityLabel="Send" onPress={() => send()} disabled={!text.trim()}>
-                <Gradient style={{ width: 50, height: 50, borderRadius: 16, alignItems: 'center', justifyContent: 'center', opacity: text.trim() ? 1 : 0.5 }}>
-                  <Icon name="arrow-up" size={22} color="#fff" />
-                </Gradient>
+                <View style={{ width: 50, height: 50, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: c.primary, opacity: text.trim() ? 1 : 0.4 }}>
+                  <Icon name="arrow-up" size={22} color={c.onPrimary} />
+                </View>
               </Pressable>
             </Row>
           </View>

@@ -41,11 +41,11 @@ function Bubble({ from, children }: { from: 'ai' | 'me'; children: ReactNode }) 
   if (from === 'me') {
     return (
       <Animated.View style={[{ alignSelf: 'flex-end', maxWidth: '85%' }, style]}>
-        <Gradient style={{ borderRadius: 18, borderBottomRightRadius: 6, paddingVertical: 10, paddingHorizontal: 14 }}>
-          <T color="#fff" style={{ fontWeight: '600' }}>
+        <View style={{ backgroundColor: c.primary, borderRadius: 18, borderBottomRightRadius: 6, paddingVertical: 10, paddingHorizontal: 14 }}>
+          <T color={c.onPrimary} style={{ fontWeight: '600' }}>
             {children}
           </T>
-        </Gradient>
+        </View>
       </Animated.View>
     );
   }

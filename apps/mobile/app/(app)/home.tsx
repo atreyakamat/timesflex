@@ -100,8 +100,8 @@ export default function Home() {
       </View>
 
       <Pressable onPress={() => router.push('/assistant')} accessibilityRole="button" accessibilityLabel="Ask TimeFlex">
-        <Gradient style={{ borderRadius: radius.lg, padding: 2 }}>
-          <View style={{ backgroundColor: c.glassStrong, borderRadius: radius.lg - 2, padding: space.lg, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: c.borderStrong }}>
+          <View style={{ backgroundColor: c.glassStrong, borderRadius: radius.lg - 1, padding: space.lg, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Icon name="sparkles" size={22} color={c.accent} />
             <View style={{ flex: 1 }}>
               <T v="h3">Ask or tell me anything</T>
@@ -109,9 +109,9 @@ export default function Home() {
                 “Mehta is away tomorrow” · “make 3 variations” · “max 3 a day for Rao”
               </T>
             </View>
-            <Icon name="arrow-forward-circle" size={28} color={c.accent} />
+            <Icon name="arrow-forward-circle" size={28} color={c.text} />
           </View>
-        </Gradient>
+        </View>
       </Pressable>
 
       {liveSessions.length > 0 && (

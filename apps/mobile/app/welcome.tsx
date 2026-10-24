@@ -32,7 +32,7 @@ function Stage({ size }: { size: number }) {
   const sway = t.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['-12deg', '12deg', '-12deg'] });
   const bob = (phase: number, amp: number) =>
     t.interpolate({ inputRange: [0, 0.25, 0.5, 0.75, 1], outputRange: [0, amp * Math.sin(phase + 1.5), 0, -amp * Math.sin(phase + 1.5), 0] });
-  const tones = [c.accent, '#F59E0B', '#10B981', c.accent2, '#F43F5E'];
+  const tones = [230, 35, 160, 270, 350].map((h) => `hsla(${h}, ${c.tile.sat + 10}%, ${c.tile.light}%, ${c.tile.alpha * 3})`);
   const card = (depth: number, opacity: number) => (
     <Animated.View
       key={depth}

@@ -58,11 +58,10 @@ export function Background() {
   });
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: c.bg, overflow: 'hidden' }]}>
-      <Animated.View style={[styles.blob, { backgroundColor: c.blob[0], opacity: c.blobOpacity, top: -160, left: -140 }, move(80, 60)]} />
-      <Animated.View style={[styles.blob, { backgroundColor: c.blob[1], opacity: c.blobOpacity * 0.8, top: 120, right: -200 }, move(-70, 90)]} />
-      <Animated.View style={[styles.blob, { backgroundColor: c.blob[2], opacity: c.blobOpacity * 0.7, bottom: -220, left: 60 }, move(60, -80)]} />
+      <Animated.View style={[styles.blob, { backgroundColor: c.blob[0], opacity: c.blobOpacity, top: -320, left: '15%' }, move(50, 20)]} />
+      <Animated.View style={[styles.blob, { backgroundColor: c.blob[1], opacity: c.blobOpacity * 0.6, top: -300, right: '-10%' }, move(-40, 30)]} />
       {Platform.OS !== 'web' && <BlurView intensity={60} tint={c.name} style={StyleSheet.absoluteFill} />}
-      {Platform.OS === 'web' && <View style={[StyleSheet.absoluteFill, { backdropFilter: 'blur(70px)' } as ViewStyle]} />}
+      {Platform.OS === 'web' && <View style={[StyleSheet.absoluteFill, { backdropFilter: 'blur(110px)' } as ViewStyle]} />}
     </View>
   );
 }
@@ -183,7 +182,7 @@ export function Card({ children, style, onPress, tone }: { children: ReactNode; 
 export function Gradient({ children, style, colors }: { children?: ReactNode; style?: StyleProp<ViewStyle>; colors?: [string, string, ...string[]] }) {
   const { c } = useTheme();
   return (
-    <LinearGradient colors={colors ?? [c.accent, c.accent2, c.accent3]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={style}>
+    <LinearGradient colors={colors ?? c.gradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={style}>
       {children}
     </LinearGradient>
   );
@@ -215,7 +214,7 @@ export function Button({
   const { c } = useTheme();
   const pad = size === 'sm' ? { paddingVertical: 8, paddingHorizontal: 12 } : size === 'lg' ? { paddingVertical: 16, paddingHorizontal: 24 } : { paddingVertical: 12, paddingHorizontal: 18 };
   const fontSize = size === 'sm' ? 13 : size === 'lg' ? 17 : 15;
-  const fg = kind === 'primary' || kind === 'danger' ? '#FFFFFF' : kind === 'ghost' ? c.text2 : c.text;
+  const fg = kind === 'primary' ? c.onPrimary : kind === 'danger' ? '#FFFFFF' : kind === 'ghost' ? c.text2 : c.text;
   const content = (
     <Row gap={8} style={{ justifyContent: 'center' }}>
       {loading ? <ActivityIndicator color={fg} size="small" /> : icon ? <Icon name={icon} size={fontSize + 3} color={fg} /> : null}
@@ -238,7 +237,7 @@ export function Button({
       ]}
     >
       {kind === 'primary' ? (
-        <Gradient style={pad}>{content}</Gradient>
+        <View style={[pad, { backgroundColor: c.primary, borderRadius: radius.md }]}>{content}</View>
       ) : (
         <View
           style={[
@@ -279,8 +278,8 @@ export function IconButton({ icon, onPress, label, size = 22, color }: { icon: I
 
 export function Chip({ label, active, onPress, icon, tone }: { label: string; active?: boolean; onPress?: () => void; icon?: IconName; tone?: 'danger' | 'ok' }) {
   const { c } = useTheme();
-  const bg = active ? (tone === 'danger' ? c.dangerSoft : tone === 'ok' ? c.okSoft : c.accent) : c.glassStrong;
-  const fg = active ? (tone === 'danger' ? c.danger : tone === 'ok' ? c.ok : '#FFFFFF') : c.text;
+  const bg = active ? (tone === 'danger' ? c.dangerSoft : tone === 'ok' ? c.okSoft : c.primary) : c.glassStrong;
+  const fg = active ? (tone === 'danger' ? c.danger : tone === 'ok' ? c.ok : c.onPrimary) : c.text;
   return (
     <Pressable
       accessibilityRole="button"
@@ -291,7 +290,7 @@ export function Chip({ label, active, onPress, icon, tone }: { label: string; ac
       }}
       style={({ pressed }) => [
         styles.chip,
-        { backgroundColor: bg, borderColor: active ? (tone === 'danger' ? c.danger : tone === 'ok' ? c.ok : c.accent) : c.borderStrong },
+        { backgroundColor: bg, borderColor: active ? (tone === 'danger' ? c.danger : tone === 'ok' ? c.ok : c.primary) : c.border },
         pressed && { opacity: 0.8 },
       ]}
     >
@@ -329,7 +328,7 @@ export function Field({ label, hint, style, ...props }: TextInputProps & { label
         style={[
           {
             borderWidth: 1,
-            borderColor: c.borderStrong,
+            borderColor: c.border,
             backgroundColor: c.glassStrong,
             borderRadius: radius.md,
             paddingHorizontal: 14,
@@ -419,7 +418,7 @@ export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
   const hue = hueOf(name);
   return (
     <LinearGradient
-      colors={[`hsl(${hue}, 75%, 62%)`, `hsl(${(hue + 45) % 360}, 72%, 56%)`]}
+      colors={[`hsl(${hue}, 22%, 34%)`, `hsl(${(hue + 30) % 360}, 20%, 26%)`]}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={{ width: size, height: size, borderRadius: size * 0.32, alignItems: 'center', justifyContent: 'center' }}
@@ -436,7 +435,7 @@ export function Progress({ value, tone }: { value: number; tone?: 'danger' }) {
       {tone === 'danger' ? (
         <View style={{ width: `${Math.min(100, Math.max(0, value * 100))}%`, height: '100%', backgroundColor: c.danger }} />
       ) : (
-        <Gradient style={{ width: `${Math.min(100, Math.max(0, value * 100))}%`, height: '100%' }} />
+        <View style={{ width: `${Math.min(100, Math.max(0, value * 100))}%`, height: '100%', backgroundColor: c.accent }} />
       )}
     </View>
   );
@@ -513,13 +512,13 @@ export function Sheet({ visible, onClose, children, title }: { visible: boolean;
 }
 
 const styles = StyleSheet.create({
-  blob: { position: 'absolute', width: 520, height: 520, borderRadius: 260 },
+  blob: { position: 'absolute', width: 640, height: 520, borderRadius: 320 },
   card: {
     borderRadius: radius.lg,
     borderWidth: 1,
     padding: space.lg,
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
     shadowOffset: { width: 0, height: 6 },
     elevation: 2,
   },

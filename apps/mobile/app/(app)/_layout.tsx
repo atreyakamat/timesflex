@@ -44,18 +44,18 @@ function TabBar({ state, navigation }: { state: { index: number; routes: { name:
               accessibilityRole="tab"
               accessibilityState={{ selected: on }}
               onPress={() => navigation.navigate(tab.name)}
-              style={({ pressed }) => [styles.railItem, on && { backgroundColor: c.accentSoft }, pressed && { opacity: 0.7 }]}
+              style={({ pressed }) => [styles.railItem, on && { backgroundColor: c.surface3 }, pressed && { opacity: 0.7 }]}
             >
-              <Icon name={on ? (tab.icon.replace('-outline', '') as IconName) : tab.icon} size={20} color={on ? c.accent : c.text2} />
-              <Text style={{ color: on ? c.accentText : c.text2, fontWeight: '600', fontSize: 15 }}>{tab.title}</Text>
+              <Icon name={on ? (tab.icon.replace('-outline', '') as IconName) : tab.icon} size={20} color={on ? c.text : c.muted} />
+              <Text style={{ color: on ? c.text : c.text2, fontWeight: '600', fontSize: 15 }}>{tab.title}</Text>
             </Pressable>
           );
         })}
         <Pressable onPress={() => router.push('/assistant')} style={{ marginTop: space.lg, marginHorizontal: space.sm }}>
-          <Gradient style={[styles.railItem, { borderRadius: radius.md }]}>
-            <Icon name="chatbubble-ellipses" size={20} color="#fff" />
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Ask TimeFlex</Text>
-          </Gradient>
+          <View style={[styles.railItem, { borderRadius: radius.md, backgroundColor: c.primary }]}>
+            <Icon name="sparkles" size={18} color={c.onPrimary} />
+            <Text style={{ color: c.onPrimary, fontWeight: '700', fontSize: 15 }}>Ask TimeFlex</Text>
+          </View>
         </Pressable>
         <View style={{ flex: 1 }} />
         <Pressable onPress={() => navigation.navigate('more')} style={[styles.railItem, { marginBottom: insets.bottom + space.md }]}>
@@ -74,9 +74,9 @@ function TabBar({ state, navigation }: { state: { index: number; routes: { name:
   return (
     <View pointerEvents="box-none" style={[styles.barWrap, { paddingBottom: insets.bottom + 8 }]}>
       <Pressable accessibilityLabel="Ask TimeFlex" onPress={() => router.push('/assistant')} style={styles.fab}>
-        <Gradient style={styles.fabInner}>
-          <Icon name="chatbubble-ellipses" size={24} color="#fff" />
-        </Gradient>
+        <View style={[styles.fabInner, { backgroundColor: c.primary }]}>
+          <Icon name="sparkles" size={22} color={c.onPrimary} />
+        </View>
       </Pressable>
       <View style={[styles.bar, { borderColor: c.glassBorder, backgroundColor: Platform.OS === 'web' ? (c.name === 'dark' ? 'rgba(18,23,36,0.97)' : 'rgba(255,255,255,0.97)') : 'transparent' }]}>
         {Platform.OS !== 'web' && <BlurView intensity={70} tint={c.name} style={StyleSheet.absoluteFill} />}
@@ -91,10 +91,10 @@ function TabBar({ state, navigation }: { state: { index: number; routes: { name:
               onPress={() => navigation.navigate(tab.name)}
               style={styles.barItem}
             >
-              <View style={[styles.barIcon, on && { backgroundColor: c.accentSoft }]}>
-                <Icon name={on ? (tab.icon.replace('-outline', '') as IconName) : tab.icon} size={21} color={on ? c.accent : c.muted} />
+              <View style={[styles.barIcon, on && { backgroundColor: c.surface3 }]}>
+                <Icon name={on ? (tab.icon.replace('-outline', '') as IconName) : tab.icon} size={21} color={on ? c.text : c.muted} />
               </View>
-              <Text style={{ fontSize: 11, fontWeight: '700', color: on ? c.accentText : c.muted }}>{tab.title}</Text>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: on ? c.text : c.muted }}>{tab.title}</Text>
             </Pressable>
           );
         })}
@@ -128,6 +128,6 @@ const styles = StyleSheet.create({
   bar: { flexDirection: 'row', width: '100%', maxWidth: 560, borderRadius: 24, borderWidth: 1, overflow: 'hidden', paddingVertical: 6 },
   barItem: { flex: 1, alignItems: 'center', gap: 2, paddingVertical: 2 },
   barIcon: { width: 44, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  fab: { position: 'absolute', right: 18, top: -66, zIndex: 2, shadowColor: '#7C3AED', shadowOpacity: 0.35, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 8 },
+  fab: { position: 'absolute', right: 18, top: -66, zIndex: 2, shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 8 },
   fabInner: { width: 56, height: 56, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
 });

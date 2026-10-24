@@ -28,8 +28,8 @@ function SessionTile({ session, view, onPress, compact }: { session: ScheduledSe
   const clash = conflicts.some((x) => x.sessionIds.includes(session.id));
   const h = hue(session.subject_id);
   const dark = c.name === 'dark';
-  const bg = clash ? c.dangerSoft : `hsla(${h}, 80%, ${dark ? 60 : 55}%, ${dark ? 0.18 : 0.14})`;
-  const edge = clash ? c.danger : `hsl(${h}, 70%, ${dark ? 65 : 45}%)`;
+  const bg = clash ? c.dangerSoft : `hsla(${h}, ${c.tile.sat}%, ${c.tile.light}%, ${c.tile.alpha})`;
+  const edge = clash ? c.danger : `hsl(${h}, ${c.tile.edgeSat}%, ${c.tile.edgeLight}%)`;
   const [kind] = view.split(':');
   const detail = [
     kind !== 'division' ? `${names[session.division_id]}${session.batch ? ` ${session.batch}` : ''}` : session.batch,
@@ -93,7 +93,7 @@ function Compare({ onChoose }: { onChoose: (id: string, shown: string[]) => void
         {rows.map(({ id, version, metrics }) => {
           const on = current?.id === id;
           return (
-            <Card key={id} style={{ width: 230, gap: 8, borderColor: on ? c.accent : c.glassBorder, borderWidth: on ? 2 : 1 }}>
+            <Card key={id} style={{ width: 230, gap: 8, borderColor: on ? c.primary : c.glassBorder, borderWidth: on ? 1.5 : 1 }}>
               <T v="h3" numberOfLines={1}>
                 {version.label.split('·')[1]?.trim() ?? version.label}
               </T>
@@ -268,7 +268,7 @@ export default function Timetable() {
                 </View>
                 {days.map((d) => (
                   <View key={d} style={{ flex: 1, padding: 3 }}>
-                    {(grid[d]?.[slot] ?? []).map((s) => (s.slot === slot ? tile(s, true) : <View key={s.id} style={{ height: 18, borderRadius: 6, backgroundColor: `hsla(${hue(s.subject_id)},70%,55%,0.10)`, marginBottom: 4 }} />))}
+                    {(grid[d]?.[slot] ?? []).map((s) => (s.slot === slot ? tile(s, true) : <View key={s.id} style={{ height: 18, borderRadius: 6, backgroundColor: `hsla(${hue(s.subject_id)},${c.tile.sat}%,${c.tile.light}%,${c.tile.alpha * 0.6})`, marginBottom: 4 }} />))}
                   </View>
                 ))}
               </View>

@@ -4,73 +4,83 @@ import { storage } from './storage';
 
 export type ThemeName = 'light' | 'dark';
 
+// Restrained, Luma-like palettes: near-neutral surfaces, soft grey text, one quiet accent,
+// and a faint glow behind everything. Colour is kept for meaning (labs, warnings, success).
 const light = {
   name: 'light' as ThemeName,
-  bg: '#F4F6FB',
-  bgDeep: '#E9ECF6',
+  bg: '#F6F6F7',
+  bgDeep: '#EDEDEF',
   surface: '#FFFFFF',
-  surface2: '#F1F3F8',
-  surface3: '#E6E9F2',
-  glass: 'rgba(255,255,255,0.72)',
-  glassStrong: 'rgba(255,255,255,0.88)',
-  glassBorder: 'rgba(255,255,255,0.9)',
-  edge: 'rgba(30,41,80,0.08)',
-  border: '#E1E5EE',
-  borderStrong: '#CDD3DF',
-  text: '#0F1424',
-  text2: '#475069',
-  muted: '#6B7489',
-  accent: '#5B5BF0',
-  accent2: '#A855F7',
-  accent3: '#EC4899',
-  accentSoft: '#ECEDFF',
-  accentText: '#3730A3',
+  surface2: '#F4F4F5',
+  surface3: '#EBEBED',
+  glass: 'rgba(255,255,255,0.78)',
+  glassStrong: 'rgba(255,255,255,0.92)',
+  glassBorder: 'rgba(17,17,19,0.07)',
+  edge: 'rgba(17,17,19,0.05)',
+  border: '#E4E4E7',
+  borderStrong: '#D4D4D8',
+  text: '#111113',
+  text2: '#52525B',
+  muted: '#71717A',
+  accent: '#5B5BD6',
+  accent2: '#8E7CC3',
+  accent3: '#C27A9E',
+  accentSoft: 'rgba(91,91,214,0.08)',
+  accentText: '#3E3EA8',
   onAccent: '#FFFFFF',
-  lab: '#9333EA',
-  labSoft: '#F4EBFF',
-  ok: '#059669',
-  okSoft: '#E4F6EE',
+  primary: '#111113',
+  onPrimary: '#FFFFFF',
+  gradient: ['#1C1C1F', '#2E2E33'] as [string, string],
+  lab: '#7C5CBF',
+  labSoft: 'rgba(124,92,191,0.08)',
+  ok: '#16A34A',
+  okSoft: 'rgba(22,163,74,0.08)',
   warn: '#B45309',
-  warnSoft: '#FFF4E0',
+  warnSoft: 'rgba(180,83,9,0.08)',
   danger: '#DC2626',
-  dangerSoft: '#FDEAEA',
-  blob: ['#A5B4FC', '#F0ABFC', '#7DD3FC'],
-  blobOpacity: 0.55,
-  shadow: '#1E295A',
+  dangerSoft: 'rgba(220,38,38,0.07)',
+  blob: ['#C7C9F5', '#F3DDC8', '#D6E4F0'],
+  blobOpacity: 0.45,
+  tile: { sat: 32, light: 52, alpha: 0.09, edgeSat: 30, edgeLight: 46 },
+  shadow: '#000000',
 };
 
 const dark: typeof light = {
   name: 'dark',
-  bg: '#0A0D16',
-  bgDeep: '#06080F',
-  surface: '#141A28',
-  surface2: '#1A2132',
-  surface3: '#242D42',
-  glass: 'rgba(20,26,40,0.66)',
-  glassStrong: 'rgba(24,30,46,0.86)',
-  glassBorder: 'rgba(255,255,255,0.08)',
-  edge: 'rgba(0,0,0,0.3)',
-  border: '#283147',
-  borderStrong: '#37425C',
-  text: '#E9ECF4',
-  text2: '#B3BBCD',
-  muted: '#8790A6',
-  accent: '#8B8CFF',
-  accent2: '#C084FC',
-  accent3: '#F472B6',
-  accentSoft: 'rgba(139,140,255,0.16)',
-  accentText: '#C9CAFF',
-  onAccent: '#0A0D16',
-  lab: '#C084FC',
-  labSoft: 'rgba(192,132,252,0.15)',
-  ok: '#34D399',
-  okSoft: 'rgba(52,211,153,0.13)',
-  warn: '#FBBF24',
-  warnSoft: 'rgba(251,191,36,0.12)',
-  danger: '#F87171',
-  dangerSoft: 'rgba(248,113,113,0.13)',
-  blob: ['#4F46E5', '#9333EA', '#0891B2'],
-  blobOpacity: 0.35,
+  bg: '#0B0B0D',
+  bgDeep: '#070708',
+  surface: '#141416',
+  surface2: '#19191C',
+  surface3: '#222226',
+  glass: 'rgba(24,24,27,0.66)',
+  glassStrong: 'rgba(28,28,32,0.88)',
+  glassBorder: 'rgba(255,255,255,0.07)',
+  edge: 'rgba(0,0,0,0.4)',
+  border: 'rgba(255,255,255,0.08)',
+  borderStrong: 'rgba(255,255,255,0.14)',
+  text: '#F4F4F5',
+  text2: '#B4B4BB',
+  muted: '#7C7C86',
+  accent: '#A8B1FF',
+  accent2: '#C4B5FD',
+  accent3: '#F0ABFC',
+  accentSoft: 'rgba(168,177,255,0.09)',
+  accentText: '#C9CEFF',
+  onAccent: '#0B0B0D',
+  primary: '#F4F4F5',
+  onPrimary: '#0B0B0D',
+  gradient: ['#26262B', '#1A1A1E'] as [string, string],
+  lab: '#B9A3F0',
+  labSoft: 'rgba(185,163,240,0.09)',
+  ok: '#6EE7A8',
+  okSoft: 'rgba(110,231,168,0.08)',
+  warn: '#F5C870',
+  warnSoft: 'rgba(245,200,112,0.08)',
+  danger: '#F59393',
+  dangerSoft: 'rgba(245,147,147,0.08)',
+  blob: ['#4C3A8C', '#6B4A2E', '#1F3654'],
+  blobOpacity: 0.22,
+  tile: { sat: 28, light: 62, alpha: 0.1, edgeSat: 30, edgeLight: 64 },
   shadow: '#000000',
 };
 
@@ -90,14 +100,14 @@ const ThemeContext = createContext<{ c: Palette; choice: Choice; setChoice: (cho
 
 const KEY = 'timeflex.theme';
 
-/** Follows the device's light/dark setting until the user picks one, which is remembered. */
+/** Dark by default (the calmer look); light and automatic are choices, remembered. */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const system = useColorScheme();
-  const [choice, setChoiceState] = useState<Choice>('system');
+  const [choice, setChoiceState] = useState<Choice>('dark');
 
   useEffect(() => {
     storage.get(KEY).then((value) => {
-      if (value === 'light' || value === 'dark') setChoiceState(value);
+      if (value === 'light' || value === 'dark' || value === 'system') setChoiceState(value);
     });
   }, []);
 
@@ -105,7 +115,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => {
     const setChoice = (next: Choice) => {
       setChoiceState(next);
-      storage.set(KEY, next === 'system' ? null : next);
+      storage.set(KEY, next);
     };
     return { c: resolved === 'dark' ? dark : light, choice, setChoice, toggle: () => setChoice(resolved === 'dark' ? 'light' : 'dark') };
   }, [resolved, choice]);
