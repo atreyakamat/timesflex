@@ -1,6 +1,10 @@
+import { claudeJson, claudeStatus, DEFAULT_CLAUDE_MODEL } from './anthropic.js';
+
 /**
- * Thin client for a locally hosted open-weight model.
+ * Thin client for the assistant's model.
  *
+ * - provider "anthropic": Claude (Sonnet 5.5 by default) through the official SDK; chosen
+ *   automatically when ANTHROPIC_API_KEY is set. See anthropic.js.
  * - provider "ollama": native /api/chat with `format` = JSON schema (grammar-constrained
  *   decoding) and `think: false`, which keeps tiny reasoning models (Qwen3 0.6B/1.7B) fast.
  * - provider "openai": any OpenAI-compatible server (LM Studio, llama.cpp llama-server, vLLM)
@@ -8,15 +12,16 @@
  * - provider "off": skip the model and use the rule-based parser only.
  */
 export const aiConfig = () => {
-  const provider = (process.env.AI_PROVIDER ?? 'ollama').toLowerCase();
+  const provider = (process.env.AI_PROVIDER ?? (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'ollama')).toLowerCase();
   const defaults = {
     ollama: 'http://127.0.0.1:11434',
     openai: 'http://127.0.0.1:1234/v1',
+    anthropic: 'https://api.anthropic.com',
   };
   return {
     provider,
     baseUrl: (process.env.AI_BASE_URL ?? defaults[provider] ?? '').replace(/\/$/, ''),
-    model: process.env.AI_MODEL ?? 'qwen3:0.6b',
+    model: process.env.AI_MODEL ?? (provider === 'anthropic' ? DEFAULT_CLAUDE_MODEL : 'qwen3:0.6b'),
     apiKey: process.env.AI_API_KEY ?? 'local',
     timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 120000),
     numCtx: Number(process.env.AI_NUM_CTX ?? 4096),
@@ -58,6 +63,7 @@ export const aiStatus = async () => {
   if (config.provider === 'off') {
     return { ...base, reachable: false, modelAvailable: false, error: 'AI disabled (AI_PROVIDER=off)' };
   }
+  if (config.provider === 'anthropic') return { ...base, ...(await claudeStatus(config.model)) };
   try {
     let names = [];
     if (config.provider === 'ollama') {
@@ -89,6 +95,7 @@ export const aiStatus = async () => {
 export const completeJson = async ({ system, user, schema }) => {
   const config = aiConfig();
   if (config.provider === 'off') throw new Error('AI disabled');
+  if (config.provider === 'anthropic') return claudeJson({ system, user, schema, model: config.model, extractJson });
 
   const messages = [
     { role: 'system', content: system },

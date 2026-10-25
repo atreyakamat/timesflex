@@ -148,7 +148,7 @@ try {
   check('landing page renders', true);
   await shot('01-landing');
 
-  await click('Get started free');
+  await click('Create your account');
   await waitFor(`__has('Let’s set up your department')`);
   await type('e.g. Goa College of Engineering', 'E2E Test College');
   await type('e.g. Prof. Anita Mehta', 'Prof. Test Coordinator');

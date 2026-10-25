@@ -1,5 +1,5 @@
 import { Redirect, router } from 'expo-router';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, View, useWindowDimensions } from 'react-native';
 import { useStore } from '../src/store';
 import { radius, space, useTheme } from '../src/theme';
@@ -103,11 +103,34 @@ function Stage({ size }: { size: number }) {
 }
 
 export default function Welcome() {
-  const { account, ready } = useStore();
+  const { account, ready, signUp } = useStore();
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoError, setDemoError] = useState('');
+
+  /** One tap for a pitch: a throwaway account, a full sample college, three versions. */
+  const startDemo = async () => {
+    setDemoBusy(true);
+    setDemoError('');
+    try {
+      const id = Math.random().toString(36).slice(2, 10);
+      await signUp({
+        institutionName: 'Demo College of Engineering',
+        institutionType: 'college',
+        name: 'Prof. Demo',
+        email: `demo-${id}@demo.timeflex.app`,
+        password: `demo-${id}-${Math.random().toString(36).slice(2)}`,
+      });
+      router.replace('/onboarding?demo=1');
+    } catch (e) {
+      setDemoError(e instanceof Error ? e.message : 'Could not start the demo.');
+      setDemoBusy(false);
+    }
+  };
   const { c, toggle } = useTheme();
   const { width } = useWindowDimensions();
   const wide = width >= 900;
-  if (ready && account) return <Redirect href="/" />;
+  // While the demo is being prepared, its own screen takes over instead of the usual redirect.
+  if (ready && account && !demoBusy) return <Redirect href="/" />;
   const stage = Math.min(wide ? 520 : width - 32, 560);
 
   return (
@@ -143,11 +166,12 @@ export default function Welcome() {
             choice, and learns how you like your week.
           </T>
           <Row gap={12} wrap>
-            <Button label="Get started free" icon="arrow-forward" size="lg" onPress={() => router.push('/auth?mode=signup')} />
-            <Button label="I have an account" kind="secondary" size="lg" onPress={() => router.push('/auth?mode=signin')} />
+            <Button label="Try the live demo" icon="play" size="lg" onPress={startDemo} loading={demoBusy} />
+            <Button label="Create your account" kind="secondary" size="lg" onPress={() => router.push('/auth?mode=signup')} />
           </Row>
+          {demoError ? <T color={c.danger}>{demoError}</T> : null}
           <Row gap={16} wrap>
-            {['No clashes, ever', 'Labs in batches', 'Private local AI'].map((item) => (
+            {['No clashes, ever', 'Labs in batches', 'Explains every choice'].map((item) => (
               <Row key={item} gap={6}>
                 <Icon name="checkmark-circle" size={16} color={c.ok} />
                 <T v="small">{item}</T>

@@ -150,7 +150,7 @@ export default function Assistant() {
             )}
             {thinking && (
               <T v="small" style={{ paddingLeft: 4 }}>
-                Thinking with the local model…
+                Thinking…
               </T>
             )}
           </ScrollView>

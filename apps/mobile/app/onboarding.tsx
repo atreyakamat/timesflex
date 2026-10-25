@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Animated, Pressable, ScrollView, View } from 'react-native';
 import {
@@ -16,6 +16,7 @@ import {
 import { api } from '../src/api';
 import { useStore, type Profile } from '../src/store';
 import { radius, space, useTheme } from '../src/theme';
+import { ActivityIndicator } from 'react-native';
 import { Background, Button, Card, Chip, Field, Gradient, Icon, IconButton, Progress, Row, Segmented, Stepper, T } from '../src/ui';
 
 /**
@@ -61,7 +62,84 @@ function Bubble({ from, children }: { from: 'ai' | 'me'; children: ReactNode }) 
   );
 }
 
+/** /onboarding?demo=1 prepares a full sample college with no questions; otherwise the conversation. */
 export default function Onboarding() {
+  const { demo } = useLocalSearchParams<{ demo?: string }>();
+  return demo ? <DemoSetup /> : <Conversation />;
+}
+
+const DEMO_STEPS = ['Creating a sample engineering department', 'Adding 7 teachers, 116 students, 6 rooms and 8 subjects', 'Building 3 clash-free timetable versions', 'Ready'];
+
+function DemoSetup() {
+  const store = useStore();
+  const { c } = useTheme();
+  const [stage, setStage] = useState(0);
+  const [error, setError] = useState('');
+  const loaded = useRef(false);
+  const started = useRef(false);
+
+  // Fill the sample once the new account's institution is open...
+  useEffect(() => {
+    if (loaded.current || !store.institutionId) return;
+    loaded.current = true;
+    store.loadSample();
+    setStage(1);
+  }, [store.institutionId]);
+
+  // ...then build three versions from it and land on Home.
+  useEffect(() => {
+    if (started.current || stage !== 1 || !store.profile.subjects.length) return;
+    started.current = true;
+    setStage(2);
+    store
+      .generateVariants(['balanced', 'compact', 'teacher_days'])
+      .then(() => {
+        setStage(3);
+        store.finishOnboarding();
+        setTimeout(() => router.replace('/home'), 700);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Could not build the demo.'));
+  }, [stage, store.profile.subjects.length]);
+
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl }}>
+      <Background />
+      <Card style={{ width: '100%', maxWidth: 460, gap: space.lg, padding: space.xl }}>
+        <View style={{ gap: 6 }}>
+          <T v="eyebrow">Live demo</T>
+          <T v="h1">Preparing your demo college</T>
+          <T>About fifteen seconds. Everything you see is real: the timetable is solved live.</T>
+        </View>
+        <View style={{ gap: space.md }}>
+          {DEMO_STEPS.map((label, index) => {
+            const done = stage > index || stage === 3;
+            const now = stage === index && stage !== 3;
+            return (
+              <Row key={label} gap={12}>
+                {done ? (
+                  <Icon name="checkmark-circle" size={22} color={c.ok} />
+                ) : now ? (
+                  <ActivityIndicator size="small" color={c.text} />
+                ) : (
+                  <Icon name="ellipse-outline" size={22} color={c.muted} />
+                )}
+                <T style={{ flex: 1, color: done || now ? c.text : c.muted }}>{label}</T>
+              </Row>
+            );
+          })}
+        </View>
+        {error ? (
+          <>
+            <T color={c.danger}>{error}</T>
+            <Button label="Go to the app" onPress={() => router.replace('/home')} />
+          </>
+        ) : null}
+      </Card>
+    </View>
+  );
+}
+
+function Conversation() {
   const store = useStore();
   const { profile, update, account } = store;
   const { c } = useTheme();

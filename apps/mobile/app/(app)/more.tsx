@@ -20,7 +20,15 @@ export default function More() {
   useEffect(() => {
     api
       .aiStatus()
-      .then((s) => setAi(s.reachable && s.modelAvailable ? `Local AI ready · ${s.model}` : 'Local AI offline · built-in rules are used'))
+      .then((s) =>
+        setAi(
+          s.reachable && s.modelAvailable
+            ? s.provider === 'anthropic'
+              ? `Claude ready · ${s.model}`
+              : `Local AI ready · ${s.model}`
+            : `${s.error ?? 'AI offline'} · built-in rules are used`,
+        ),
+      )
       .catch(() => setAi('Local AI offline · built-in rules are used'));
   }, []);
 

@@ -120,5 +120,5 @@ export const api = {
     request<{ intent: ModelIntent; source: string; elapsedMs: number }>('/api/agent/interpret', { method: 'POST', body: { text, context } }),
   parse: (text: string, context: { teachers: string[]; rooms: string[] }) =>
     request<ParseResult>('/api/parse', { method: 'POST', body: { text, context } }),
-  aiStatus: () => request<{ reachable: boolean; modelAvailable: boolean; model: string }>('/api/ai/status'),
+  aiStatus: () => request<{ provider: string; reachable: boolean; modelAvailable: boolean; model: string; error?: string | null }>('/api/ai/status'),
 };
