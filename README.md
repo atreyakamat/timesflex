@@ -1,8 +1,12 @@
 # TimeFlex
 
-TimeFlex is an enterprise education scheduling platform for AI-assisted and manual timetable generation.
-This MVP covers the PRD's first slice: **one college department timetable**, set up by a timetable
-coordinator in plain words (parsed by a small local model) or by hand, then solved with OR-Tools.
+TimeFlex plans a college department's timetable together with the faculty member who usually does it alone.
+You set it up by answering a friendly assistant (or in plain words, read by a small local model), it builds
+several clash-free versions with OR-Tools, explains every choice, and learns which kind of week you prefer.
+
+There are two front ends:
+- **`apps/mobile`: the app** (React Native + Expo) for **Android, iOS and the web**. This is the main product.
+- `apps/web`: the earlier web app (React + Vite), kept working until the app covers everything it does.
 
 ## Quick start
 
@@ -10,23 +14,65 @@ Needs Node 20+ and Python 3.11+. Ollama is optional.
 
 ```bash
 npm install
-npm run setup        # creates the solver virtualenv, checks for Ollama
-ollama pull qwen3:0.6b   # optional, ~520 MB; enables AI quick setup
-npm run dev          # solver :8000, API :3001, web http://localhost:5173
+npm run setup            # solver virtualenv, app dependencies, checks for Ollama
+ollama pull qwen3:0.6b   # optional, ~520 MB; lets the assistant understand free-form requests
+npm run dev              # solver :8000, API :3001 (and the older web app on :5173)
+npm run app              # the app in the browser (Expo, http://localhost:8081)
 ```
+
+On a phone: install **Expo Go**, run `npm run app:android` or `npm run app:ios` (or `npm run app` and scan the
+QR code); the phone must be on the same network, and the app finds the API on the computer running Expo.
+Set `EXPO_PUBLIC_API_URL` to point it elsewhere. Store builds (APK / IPA) are made with `eas build` or Android
+Studio / Xcode from `apps/mobile`; nothing in this repository needs them to run.
 
 No database setup is needed: without `DATABASE_URL` the API stores data in `apps/api/data/timesflex.json`.
 Set `DATABASE_URL=postgres://user:pass@localhost:5432/timesflex` to use PostgreSQL instead.
 
-## Workspace layout
-- `apps/web`: React frontend for setup, generation, and editing
-- `apps/api`: Node.js API for institutions, timetable versions, chat parsing, and solver orchestration
-- `services/solver`: Python scheduling engine using OR-Tools CP-SAT
-- `packages/shared`: Shared types and schemas
-- `docs`: Product, stack, design, and roadmap docs
-- `scripts`: `setup`, `dev` and test runners (no extra dependencies)
+## The app, screen by screen
+- **Welcome**: what TimeFlex does, with an animated 3D stack of timetable cards; light, dark or automatic theme.
+- **Sign up**: one account per department (institution name and type, your name, e-mail, password).
+- **Onboarding**: a chat with the assistant. It asks one thing at a time (days, hours, periods, break,
+  department), then you add classes, teachers (with expertise), rooms and subjects one by one, with suggested
+  next names ("SE-B", "Room 102") and starred teachers whose expertise matches a subject. It then checks the
+  setup, offers one-tap fixes, and builds three versions to compare. Or: describe it in your own words, or
+  explore with sample data.
+- **Home**: today at a glance, *What I noticed* (problems and tips, each with a fix), *Your taste* (what it has
+  learned), and department stats.
+- **Timetable**: by class, teacher or room; a week grid on wide screens, day by day on phones. Tap a class to see
+  **why it is there** and the times it could move to without a clash or breaking a limit; lock it. Build new
+  versions in any style (balanced, compact days, even spread, fewer teacher days, late start, *your style*),
+  compare them side by side, choose one, approve.
+- **Assistant** (the chat button everywhere): type what changed, e.g. "Mehta is on leave Monday to Wednesday",
+  "max 3 a day for Rao", "add lab 3 with 32 seats", "make 3 variations". It always shows exactly what it will
+  change and waits for *Apply*.
+- **Today**, **Cover** (mark who is away, auto-assign fair substitutes, share on WhatsApp), **Attendance**,
+  **Setup** editors and a **profile for every teacher**.
 
-## The coordinator's flow
+## How the intelligence works
+All of it is plain TypeScript in `packages/core`, tested, and shared by both front ends.
+- **Insights** (`insights.ts`): checks the setup and the timetable (overloaded teachers, subjects without a
+  teacher, missing or too-small rooms, overfull weeks, idle gaps, late periods) and attaches a fix to each.
+- **Explanations** (`explain.ts`): rebuilds why a session sits where it does from the finished timetable, and
+  lists legal alternatives.
+- **Agent** (`agent.ts`, `command.ts`): instructions become a list of actions. Common phrasings are read by rules,
+  offline and instantly; anything else goes to the local model (`POST /api/agent/interpret`), which only
+  classifies the request. Names are checked against the real data, nothing is invented, and nothing is
+  applied without approval.
+- **Learning** (`learning.ts`): every version you choose over others, and every class you drag, nudges a small set
+  of preference weights (finish early, fewer teacher days, avoid first or last period, even days, few gaps). Those
+  become solver weights for a *Your style* timetable. Small and explainable, and it never leaves the institution.
+
+## Workspace layout
+- `apps/mobile`: the app (Expo SDK 57, expo-router) for Android, iOS and web
+- `apps/web`: the earlier React web app
+- `apps/api`: Node.js API for accounts, institutions, timetable versions, parsing and the assistant
+- `services/solver`: Python scheduling engine using OR-Tools CP-SAT, with styles and learned weights
+- `packages/core`: shared scheduling, operations and intelligence logic (no React, no DOM)
+- `packages/shared`: older shared types
+- `docs`: product, stack, design and roadmap docs
+- `scripts`: setup, dev runner, test runners, the app's static server and the end-to-end test
+
+## The coordinator's flow (earlier web app)
 TimeFlex is presented as a timetable maker. Every step asks only for what a timetable needs, plus optional details that
 each pay off inside the timetable, and the result is a complete record of the department.
 
@@ -135,6 +181,11 @@ scored 80%, so expect occasional misses on unfamiliar phrasing. That is why ever
 
 ## Tests
 ```bash
-npm test             # API parser tests, web logic + export tests (node:test), solver tests (pytest)
-npm run typecheck
+npm test             # API, core logic, web exports (node:test) and solver (pytest)
+npm run typecheck    # every package, including the app
+
+# End-to-end, in headless Chrome against the real app and API:
+npm run dev                                    # API and solver
+npm run app:build-web && npm run app:serve     # the app on :8081
+npm run test:e2e                               # signs up, builds, compares, uses the assistant, deletes the account
 ```

@@ -4,14 +4,15 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@anthropic-ai/sdk": "0.133.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "nanoid": "^5.0.7",
     "pg": "^8.12.0"
   },
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch-path=src src/index.js",
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --env-file-if-exists=.env --watch-path=src src/index.js",
     "build": "echo \"build not configured yet\"",
     "lint": "echo \"lint not configured yet\"",
     "typecheck": "echo \"typecheck not configured yet\"",

@@ -15,6 +15,7 @@ import {
   verifyPassword,
 } from './auth.js';
 import { DuplicateEmailError } from './db.js';
+import { interpretCommand } from './intent.js';
 import { aiConfig, aiStatus } from './llm.js';
 import { parseRequirements } from './parser.js';
 import { solveWithSolver } from './solverClient.js';
@@ -242,6 +243,12 @@ export const createApp = ({ store, solve = solveWithSolver, loginLimiter = creat
     const timetable = await ownedTimetable(request, request.params.id);
     if (!timetable) return notFound(response, 'Timetable');
     response.json(timetable);
+  }));
+
+  app.post('/api/agent/interpret', route(async (request, response) => {
+    const { text, context } = request.body ?? {};
+    if (!text || !String(text).trim()) return fail(response, 400, 'text is required');
+    response.json(await interpretCommand(String(text), context ?? {}));
   }));
 
   app.post('/api/parse', route(async (request, response) => {
