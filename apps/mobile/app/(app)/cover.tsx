@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Linking, View } from 'react-native';
+import { View } from 'react-native';
 import {
   absentTeacherIds,
   assignSubstitute,
@@ -13,11 +13,10 @@ import {
   toDateKey,
   uncoveredPeriods,
   weekdayOf,
-  whatsappLink,
 } from '@core';
 import { useStore } from '../../src/store';
 import { space, useTheme } from '../../src/theme';
-import { Avatar, Button, Card, Chip, Empty, Icon, IconButton, Pill, Progress, Row, Screen, SectionTitle, T, useWide } from '../../src/ui';
+import { Avatar, Button, Card, Chip, Empty, Icon, IconButton, Pill, Progress, Row, Screen, SectionTitle, T, useToast, useWide } from '../../src/ui';
 
 const shift = (key: string, by: number) => {
   const [y, m, d] = key.split('-').map(Number);
@@ -25,8 +24,10 @@ const shift = (key: string, by: number) => {
 };
 
 export default function Cover() {
-  const { profile, liveSessions, slots, names, updateOperations } = useStore();
+  const { profile, liveSessions, slots, names, updateOperations, coverUpdate } = useStore();
   const { c } = useTheme();
+  const toast = useToast();
+  const [telling, setTelling] = useState(false);
   const wide = useWide();
   const days = profile.institution.workingDays;
   const [date, setDate] = useState(() => {
@@ -52,14 +53,18 @@ export default function Cover() {
     setMessage('');
   };
 
-  const notice = `Substitutions for ${formatDateKey(date)}\n\n${dayList
-    .filter((s) => absent.has(s.teacher_id))
-    .map((s) => {
-      const sub = subs.find((x) => x.sessionId === s.id);
-      const who = !sub ? 'NOT COVERED' : sub.substituteTeacherId ? names[sub.substituteTeacherId] : 'free period';
-      return `${s.slot.split('-')[0]} ${names[s.subject_id]} · ${names[s.division_id]} · ${names[s.room_id]}: ${names[s.teacher_id]} → ${who}`;
-    })
-    .join('\n')}`;
+  const tell = async () => {
+    setTelling(true);
+    try {
+      const notice = await coverUpdate(date);
+      if (notice) router.push('/updates');
+      else toast.show('Nobody needs telling yet.');
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : 'Could not prepare the messages.');
+    } finally {
+      setTelling(false);
+    }
+  };
 
   if (!liveSessions.length) {
     return (
@@ -179,17 +184,11 @@ export default function Cover() {
 
       {total > 0 && (
         <>
-          <SectionTitle title="Share" />
+          <SectionTitle title="Let them know" />
           <Card style={{ gap: space.md }}>
-            <T v="mono">{notice}</T>
-            <Row gap={8} wrap>
-              <Button label="Share on WhatsApp" icon="logo-whatsapp" onPress={() => Linking.openURL(`https://wa.me/?text=${encodeURIComponent(notice)}`)} />
-              {[...new Set(subs.map((x) => x.substituteTeacherId).filter(Boolean))].map((id) => {
-                const t = profile.teachers.find((x) => x.id === id);
-                if (!t?.phone) return null;
-                return <Button key={id} label={`Tell ${t.name}`} kind="secondary" size="sm" icon="chatbubble-outline" onPress={() => Linking.openURL(whatsappLink(t.phone!, notice))} />;
-              })}
-            </Row>
+            <T>Substitutes and anyone away each get their own message, and you can see who has been told.</T>
+            {open.length ? <T color={c.warn}>{open.length} period{open.length === 1 ? ' is' : 's are'} not covered yet.</T> : null}
+            <Button label="Tell the teachers" icon="paper-plane" loading={telling} onPress={tell} style={{ alignSelf: 'flex-start' }} />
           </Card>
         </>
       )}

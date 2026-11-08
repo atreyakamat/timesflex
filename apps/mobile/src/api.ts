@@ -10,6 +10,9 @@ import type {
   SolverResult,
   TimetableRecord,
   TimetableStatus,
+  NoticeRecipient,
+  NoticeRecord,
+  TimetableUpdate,
 } from '@core';
 import type { ModelIntent } from '@core';
 import { storage } from './storage';
@@ -152,5 +155,11 @@ export const api = {
     request<{ intent: ModelIntent; source: string; elapsedMs: number }>('/api/agent/interpret', { method: 'POST', body: { text, context } }),
   parse: (text: string, context: { teachers: string[]; rooms: string[] }) =>
     request<ParseResult>('/api/parse', { method: 'POST', body: { text, context } }),
+  listNotices: (id: string) => request<NoticeRecord[]>(`/api/institutions/${id}/notices`),
+  createNotice: (id: string, body: Pick<TimetableUpdate, 'title' | 'kind' | 'groupText' | 'recipients'>) => request<NoticeRecord>(`/api/institutions/${id}/notices`, { method: 'POST', body }),
+  markRecipient: (noticeId: string, teacherId: string, status: NoticeRecipient['status']) => request<NoticeRecord>(`/api/notices/${noticeId}/recipients/${teacherId}`, { method: 'PUT', body: { status } }),
+  markGroup: (noticeId: string, shared: boolean) => request<NoticeRecord>(`/api/notices/${noticeId}/group`, { method: 'PUT', body: { shared } }),
+  sendNotice: (noticeId: string) => request<NoticeRecord>(`/api/notices/${noticeId}/send`, { method: 'POST', body: {} }),
+  notifyStatus: () => request<{ whatsappApi: boolean }>('/api/notify/status'),
   aiStatus: () => request<{ provider: string; reachable: boolean; modelAvailable: boolean; model: string; error?: string | null }>('/api/ai/status'),
 };

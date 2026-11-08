@@ -1,7 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   applyActions,
+  buildCoverUpdate,
   buildSlots,
+  buildTimetableUpdate,
+  repairRooms,
+  sessionsWithoutRoom,
   buildSolverRequest,
   emptyModel,
   emptyOperations,
@@ -19,6 +23,9 @@ import {
   type AgentAction,
   type Conflict,
   type InstitutionRecord,
+  type NoticeRecord,
+  type PublishedTimetable,
+  type TimetableUpdate,
   type OperationsData,
   type PreferenceModel,
   type ProfileData,
@@ -30,7 +37,7 @@ import {
 import { api, loadToken, setUnauthorizedHandler } from './api';
 
 /** The institution profile plus what the assistant has learned about the coordinator. */
-export type Profile = ProfileData & { learning: PreferenceModel; selectedVersionId?: string };
+export type Profile = ProfileData & { learning: PreferenceModel; selectedVersionId?: string; published?: PublishedTimetable };
 
 /** 'yours' = balanced plus the learned weights. */
 export type GenerateStyle = VariantStyle | 'yours';
@@ -87,6 +94,10 @@ interface Store {
   sessions: ScheduledSession[];
   /** The version daily tools use: approved if there is one, else the newest. */
   liveSessions: ScheduledSession[];
+  liveVersion: TimetableRecord | null;
+  /** Who needs telling what, compared with what they last heard. */
+  pendingUpdate: TimetableUpdate;
+  sessionsNeedingRoom: ScheduledSession[];
   unplaced: SessionRequest[];
   diagnostics: string[];
   conflicts: Conflict[];
@@ -109,6 +120,13 @@ interface Store {
   chooseVersion: (id: string, comparedWith: string[]) => void;
   setApproved: (approved: boolean) => Promise<void>;
   moveSession: (id: string, patch: Partial<ScheduledSession>) => void;
+  /** Gives classes that lost their room a free one. Returns how many it couldn't place. */
+  fixRooms: () => number;
+  /** Saves any waiting changes immediately. */
+  saveNow: () => Promise<void>;
+  /** Records the pending update, and treats it as what teachers now know. */
+  publishUpdate: () => Promise<NoticeRecord | null>;
+  coverUpdate: (date: string) => Promise<NoticeRecord | null>;
   finishOnboarding: () => void;
 }
 
@@ -130,6 +148,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const profileDirty = useRef(false);
   const opsDirty = useRef(false);
   const sessionsDirty = useRef(false);
+  // A failed save is tried again, so a dropped connection doesn't lose work.
+  const [retry, setRetry] = useState(0);
+  const failed = useCallback(() => {
+    setSaveState('error');
+    setTimeout(() => setRetry((n) => n + 1), 8000);
+  }, []);
 
   const reset = useCallback(() => {
     setAccount(null);
@@ -187,10 +211,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           profileDirty.current = false;
           setSaveState('saved');
         })
-        .catch(() => setSaveState('error'));
+        .catch(failed);
     }, 800);
     return () => clearTimeout(timer);
-  }, [profile, institutionId]);
+  }, [profile, institutionId, retry, failed]);
 
   useEffect(() => {
     if (!institutionId || !opsDirty.current) return;
@@ -199,11 +223,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .saveOperations(institutionId, profile.operations)
         .then(() => {
           opsDirty.current = false;
+          if (!profileDirty.current && !sessionsDirty.current) setSaveState('saved');
         })
-        .catch(() => setSaveState('error'));
+        .catch(failed);
     }, 500);
     return () => clearTimeout(timer);
-  }, [profile.operations, institutionId]);
+  }, [profile.operations, institutionId, retry, failed]);
 
   useEffect(() => {
     if (!currentId || !sessionsDirty.current) return;
@@ -213,11 +238,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .then((saved) => {
           sessionsDirty.current = false;
           setVersions((list) => list.map((v) => (v.id === saved.id ? saved : v)));
+          if (!profileDirty.current && !opsDirty.current) setSaveState('saved');
         })
-        .catch(() => setSaveState('error'));
+        .catch(failed);
     }, 800);
     return () => clearTimeout(timer);
-  }, [sessions, currentId]);
+  }, [sessions, currentId, retry, failed]);
+
+  // In a browser, warn before closing with changes that haven't reached the server.
+  useEffect(() => {
+    const target = globalThis as unknown as { addEventListener?: (name: string, handler: (event: { preventDefault: () => void }) => void) => void; removeEventListener?: (name: string, handler: (event: { preventDefault: () => void }) => void) => void };
+    if (!target.addEventListener) return;
+    const warn = (event: { preventDefault: () => void }) => {
+      if (profileDirty.current || opsDirty.current || sessionsDirty.current) event.preventDefault();
+    };
+    target.addEventListener('beforeunload', warn);
+    return () => target.removeEventListener?.('beforeunload', warn);
+  }, []);
 
   const slots = useMemo(
     () =>
@@ -245,7 +282,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
   const current = versions.find((v) => v.id === currentId) ?? null;
   const live = versions.find((v) => v.status === 'approved') ?? versions.find((v) => v.generatedSessions?.length);
-  const liveSessions = live ? (live.id === currentId ? sessions : live.generatedSessions) : [];
+  const liveSessions = useMemo(() => (live ? (live.id === currentId ? sessions : live.generatedSessions) : []), [live, currentId, sessions]);
+  const pendingUpdate = useMemo(() => buildTimetableUpdate({ published: profile.published, sessions: liveSessions, profile, slots }), [profile, liveSessions, slots]);
+  const sessionsNeedingRoom = useMemo(() => sessionsWithoutRoom(liveSessions, profile.rooms), [liveSessions, profile.rooms]);
 
   const update = useCallback((change: (profile: Profile) => Profile) => {
     profileDirty.current = true;
@@ -348,6 +387,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [profile, generate, generateVariants],
   );
 
+  const persistProfile = (next: Profile) =>
+    api.saveProfile(institutionId!, { name: next.institution.name || 'Untitled institution', type: next.institution.type, profile: next as unknown as Record<string, unknown> });
+  /** Teachers must exist on the server before they can be messaged, and it reads their numbers from there. */
+  const saveNow = async () => {
+    if (!institutionId) return;
+    if (profileDirty.current) {
+      await persistProfile(profile);
+      profileDirty.current = false;
+    }
+    if (opsDirty.current) {
+      await api.saveOperations(institutionId, profile.operations);
+      opsDirty.current = false;
+    }
+    if (sessionsDirty.current && currentId) {
+      const saved = await api.updateTimetable(currentId, { generatedSessions: sessions });
+      sessionsDirty.current = false;
+      setVersions((list) => list.map((v) => (v.id === saved.id ? saved : v)));
+    }
+    setSaveState('saved');
+  };
+
   const days = profile.institution.workingDays;
   const value: Store = {
     ready,
@@ -361,6 +421,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     current,
     sessions,
     liveSessions,
+    liveVersion: live ?? null,
+    pendingUpdate,
+    sessionsNeedingRoom,
     unplaced,
     diagnostics,
     conflicts,
@@ -434,6 +497,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSessions((list) => list.map((s) => (s.id === id ? { ...s, ...patch } : s)));
     },
     finishOnboarding: () => setIsNew(false),
+    fixRooms: () => {
+      const result = repairRooms(sessions, profile.rooms, slots);
+      sessionsDirty.current = true;
+      setSessions(result.sessions);
+      return result.unfixed;
+    },
+    saveNow,
+    publishUpdate: async () => {
+      if (!institutionId || !live || !pendingUpdate.recipients.length) return null;
+      await saveNow();
+      const notice = await api.createNotice(institutionId, pendingUpdate);
+      const published: PublishedTimetable = { versionId: live.id, at: new Date().toISOString(), sessions: liveSessions, names };
+      const next = { ...profile, published };
+      setProfile(next);
+      await persistProfile(next);
+      return notice;
+    },
+    coverUpdate: async (date) => {
+      if (!institutionId) return null;
+      await saveNow();
+      const update = buildCoverUpdate({ date, ops: profile.operations, sessions: liveSessions, profile, slots });
+      return update.recipients.length ? api.createNotice(institutionId, update) : null;
+    },
   };
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

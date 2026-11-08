@@ -45,6 +45,20 @@ CREATE TABLE IF NOT EXISTS timetables (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT fk_institution FOREIGN KEY (institution_id) REFERENCES institutions (id)
 );
+
+CREATE TABLE IF NOT EXISTS notices (
+  id TEXT PRIMARY KEY,
+  institution_id TEXT NOT NULL REFERENCES institutions (id) ON DELETE CASCADE,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS notices_institution ON notices (institution_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS message_links (
+  message_id TEXT PRIMARY KEY,
+  notice_id TEXT NOT NULL REFERENCES notices (id) ON DELETE CASCADE,
+  teacher_id TEXT NOT NULL
+);
 `;
 
 const toAccount = (row) => ({
@@ -211,6 +225,34 @@ export const createPgStore = async (connectionString) => {
       );
       return getTimetable(id);
     },
+    async createNotice({ id, institutionId, ...rest }) {
+      await pool.query('INSERT INTO notices (id, institution_id, data) VALUES ($1, $2, $3)', [id, institutionId, JSON.stringify(rest)]);
+      return { id, institutionId, ...rest };
+    },
+    async getNotice(id) {
+      const result = await pool.query('SELECT * FROM notices WHERE id = $1', [id]);
+      return result.rows[0] ? { ...result.rows[0].data, id: result.rows[0].id, institutionId: result.rows[0].institution_id } : null;
+    },
+    async listNotices(institutionId, limit) {
+      const result = await pool.query('SELECT * FROM notices WHERE institution_id = $1 ORDER BY created_at DESC LIMIT $2', [institutionId, limit]);
+      return result.rows.map((row) => ({ ...row.data, id: row.id, institutionId: row.institution_id }));
+    },
+    async updateNotice(id, { id: _id, institutionId: _institutionId, ...rest }) {
+      await pool.query('UPDATE notices SET data = $1 WHERE id = $2', [JSON.stringify(rest), id]);
+    },
+    async pruneNotices(institutionId, keep) {
+      await pool.query(
+        'DELETE FROM notices WHERE id IN (SELECT id FROM notices WHERE institution_id = $1 ORDER BY created_at DESC OFFSET $2)',
+        [institutionId, keep],
+      );
+    },
+    async linkMessage(messageId, noticeId, teacherId) {
+      await pool.query('INSERT INTO message_links (message_id, notice_id, teacher_id) VALUES ($1, $2, $3) ON CONFLICT (message_id) DO NOTHING', [messageId, noticeId, teacherId]);
+    },
+    async findMessageLink(messageId) {
+      const result = await pool.query('SELECT * FROM message_links WHERE message_id = $1', [messageId]);
+      return result.rows[0] ? { noticeId: result.rows[0].notice_id, teacherId: result.rows[0].teacher_id } : null;
+    },
     async pruneTimetables(institutionId, keep) {
       await pool.query(
         `DELETE FROM timetables WHERE id IN (
@@ -245,7 +287,12 @@ export const createFileStore = async (filePath) => {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  state = { accounts: [], sessions: [], institutions: [], timetables: [], ...state };
+  state = { accounts: [], sessions: [], institutions: [], timetables: [], notices: [], messageLinks: [], ...state };
+  const dropNoticesOf = (ids) => {
+    const gone = new Set(state.notices.filter((item) => ids.has(item.institutionId)).map((item) => item.id));
+    state.notices = state.notices.filter((item) => !gone.has(item.id));
+    state.messageLinks = state.messageLinks.filter((item) => !gone.has(item.noticeId));
+  };
 
   // Serialise writes so concurrent requests never interleave partial files.
   let writing = Promise.resolve();
@@ -310,6 +357,7 @@ export const createFileStore = async (filePath) => {
       const before = state.accounts.length;
       const owned = new Set(state.institutions.filter((item) => item.ownerId === id).map((item) => item.id));
       state.timetables = state.timetables.filter((item) => !owned.has(item.institutionId));
+      dropNoticesOf(owned);
       state.institutions = state.institutions.filter((item) => item.ownerId !== id);
       state.sessions = state.sessions.filter((item) => item.accountId !== id);
       state.accounts = state.accounts.filter((item) => item.id !== id);
@@ -343,6 +391,7 @@ export const createFileStore = async (filePath) => {
       const before = state.institutions.length;
       state.institutions = state.institutions.filter((item) => item.id !== id);
       state.timetables = state.timetables.filter((item) => item.institutionId !== id);
+      dropNoticesOf(new Set([id]));
       await persist();
       return state.institutions.length < before;
     },
@@ -360,6 +409,46 @@ export const createFileStore = async (filePath) => {
       state.timetables.push(record);
       await persist();
       return clone(record);
+    },
+    async createNotice(notice) {
+      state.notices.push(structuredClone(notice));
+      await persist();
+      return clone(notice);
+    },
+    async getNotice(id) {
+      return clone(state.notices.find((item) => item.id === id));
+    },
+    async listNotices(institutionId, limit) {
+      return clone(
+        state.notices
+          .filter((item) => item.institutionId === institutionId)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, limit),
+      );
+    },
+    async updateNotice(id, notice) {
+      const index = state.notices.findIndex((item) => item.id === id);
+      if (index !== -1) state.notices[index] = structuredClone(notice);
+      await persist();
+    },
+    async pruneNotices(institutionId, keep) {
+      const stale = new Set(
+        state.notices
+          .filter((item) => item.institutionId === institutionId)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(keep)
+          .map((item) => item.id),
+      );
+      state.notices = state.notices.filter((item) => !stale.has(item.id));
+      state.messageLinks = state.messageLinks.filter((item) => !stale.has(item.noticeId));
+      await persist();
+    },
+    async linkMessage(messageId, noticeId, teacherId) {
+      state.messageLinks.push({ messageId, noticeId, teacherId });
+      await persist();
+    },
+    async findMessageLink(messageId) {
+      return clone(state.messageLinks.find((item) => item.messageId === messageId));
     },
     async pruneTimetables(institutionId, keep) {
       const stale = new Set(

@@ -6,21 +6,49 @@ import { useStore } from '../../src/store';
 import { radius, space, useTheme } from '../../src/theme';
 import { Avatar, Gradient, Icon, T, useWide, type IconName } from '../../src/ui';
 
-const TABS: { name: string; title: string; icon: IconName }[] = [
-  { name: 'home', title: 'Home', icon: 'sparkles-outline' },
+const TABS: { name: string; title: string; icon: IconName; wideOnly?: boolean }[] = [
+  { name: 'home', title: 'Home', icon: 'home-outline' },
   { name: 'timetable', title: 'Timetable', icon: 'grid-outline' },
-  { name: 'today', title: 'Today', icon: 'time-outline' },
+  { name: 'today', title: 'Today', icon: 'time-outline', wideOnly: true },
   { name: 'cover', title: 'Cover', icon: 'swap-horizontal-outline' },
+  { name: 'updates', title: 'Updates', icon: 'paper-plane-outline' },
   { name: 'more', title: 'More', icon: 'apps-outline' },
 ];
+
+function Badge({ count }: { count: number }) {
+  const { c } = useTheme();
+  if (!count) return null;
+  return (
+    <View style={{ minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center', backgroundColor: c.danger }}>
+      <Text accessibilityLabel={`${count} waiting`} style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>
+        {count > 99 ? '99+' : count}
+      </Text>
+    </View>
+  );
+}
+
+/** Always visible when work isn't reaching the server, on phones too. */
+function SaveWarning() {
+  const { saveState } = useStore();
+  const { c } = useTheme();
+  const insets = useSafeAreaInsets();
+  if (saveState !== 'error') return null;
+  return (
+    <View style={{ position: 'absolute', top: insets.top + 8, alignSelf: 'center', zIndex: 10, flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: c.danger, borderRadius: radius.pill, paddingVertical: 8, paddingHorizontal: 14 }}>
+      <Icon name="cloud-offline-outline" size={16} color="#fff" />
+      <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Not saved yet. Trying again…</Text>
+    </View>
+  );
+}
 
 /** Bottom tabs on phones, a side rail on wide screens; the assistant button floats above both. */
 function TabBar({ state, navigation }: { state: { index: number; routes: { name: string; key: string }[] }; navigation: { navigate: (name: string) => void } }) {
   const { c } = useTheme();
   const wide = useWide();
   const insets = useSafeAreaInsets();
-  const { account, profile, saveState } = useStore();
+  const { account, profile, saveState, pendingUpdate, liveVersion } = useStore();
   const active = state.routes[state.index]?.name;
+  const waiting = liveVersion?.status === 'approved' ? pendingUpdate.recipients.length : 0;
 
   if (wide) {
     return (
@@ -47,7 +75,8 @@ function TabBar({ state, navigation }: { state: { index: number; routes: { name:
               style={({ pressed }) => [styles.railItem, on && { backgroundColor: c.surface3 }, pressed && { opacity: 0.7 }]}
             >
               <Icon name={on ? (tab.icon.replace('-outline', '') as IconName) : tab.icon} size={20} color={on ? c.text : c.muted} />
-              <Text style={{ color: on ? c.text : c.text2, fontWeight: '600', fontSize: 15 }}>{tab.title}</Text>
+              <Text style={{ color: on ? c.text : c.text2, fontWeight: '600', fontSize: 15, flex: 1 }}>{tab.title}</Text>
+              {tab.name === 'updates' ? <Badge count={waiting} /> : null}
             </Pressable>
           );
         })}
@@ -80,7 +109,7 @@ function TabBar({ state, navigation }: { state: { index: number; routes: { name:
       </Pressable>
       <View style={[styles.bar, { borderColor: c.glassBorder, backgroundColor: Platform.OS === 'web' ? (c.name === 'dark' ? 'rgba(18,23,36,0.97)' : 'rgba(255,255,255,0.97)') : 'transparent' }]}>
         {Platform.OS !== 'web' && <BlurView intensity={70} tint={c.name} style={StyleSheet.absoluteFill} />}
-        {TABS.map((tab) => {
+        {TABS.filter((tab) => !tab.wideOnly).map((tab) => {
           const on = active === tab.name;
           return (
             <Pressable
@@ -93,6 +122,11 @@ function TabBar({ state, navigation }: { state: { index: number; routes: { name:
             >
               <View style={[styles.barIcon, on && { backgroundColor: c.surface3 }]}>
                 <Icon name={on ? (tab.icon.replace('-outline', '') as IconName) : tab.icon} size={21} color={on ? c.text : c.muted} />
+                {tab.name === 'updates' && waiting ? (
+                  <View style={{ position: 'absolute', top: -4, right: 0 }}>
+                    <Badge count={waiting} />
+                  </View>
+                ) : null}
               </View>
               <Text style={{ fontSize: 11, fontWeight: '700', color: on ? c.text : c.muted }}>{tab.title}</Text>
             </Pressable>
@@ -109,14 +143,17 @@ export default function AppLayout() {
   usePathname();
   if (ready && !account) return <Redirect href="/welcome" />;
   return (
-    <Tabs
-      tabBar={(props) => <TabBar {...(props as any)} />}
-      screenOptions={{ headerShown: false, tabBarPosition: wide ? 'left' : 'bottom', sceneStyle: { backgroundColor: 'transparent' } }}
-    >
-      {TABS.map((tab) => (
-        <Tabs.Screen key={tab.name} name={tab.name} options={{ title: tab.title }} />
-      ))}
-    </Tabs>
+    <View style={{ flex: 1 }}>
+      <Tabs
+        tabBar={(props) => <TabBar {...(props as any)} />}
+        screenOptions={{ headerShown: false, tabBarPosition: wide ? 'left' : 'bottom', sceneStyle: { backgroundColor: 'transparent' }, animation: 'fade', lazy: true }}
+      >
+        {TABS.map((tab) => (
+          <Tabs.Screen key={tab.name} name={tab.name} options={{ title: tab.title }} />
+        ))}
+      </Tabs>
+      <SaveWarning />
+    </View>
   );
 }
 

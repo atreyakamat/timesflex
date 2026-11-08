@@ -201,7 +201,7 @@ function Classes() {
 }
 
 function Rooms() {
-  const { profile, update } = useStore();
+  const { profile, update, liveSessions } = useStore();
   const [editing, setEditing] = useState<RoomForm | null>(null);
   const last = profile.rooms[profile.rooms.length - 1];
   const save = (room: RoomForm) => {
@@ -241,6 +241,11 @@ function Rooms() {
             <Stepper label="Seats" value={editing.capacity} min={1} max={500} step={5} onChange={(capacity) => setEditing({ ...editing, capacity })} />
             {editing.type === 'lab' && <Field label="Equipment / software" value={editing.equipment ?? ''} onChangeText={(equipment) => setEditing({ ...editing, equipment })} placeholder="e.g. 30 PCs, MySQL" />}
             <Button label="Save" onPress={() => save(editing)} disabled={!editing.name.trim()} />
+            {liveSessions.some((s) => s.room_id === editing.id) && (
+              <T v="small">
+                {liveSessions.filter((s) => s.room_id === editing.id).length} classes are in this room. If you delete it, the timetable will offer to move them to free rooms.
+              </T>
+            )}
             {profile.rooms.some((r) => r.id === editing.id) && (
               <Button
                 label="Delete room"

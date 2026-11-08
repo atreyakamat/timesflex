@@ -13,10 +13,11 @@ import {
   timetableMetrics,
   type ScheduledSession,
   type TimetableMetrics,
+  freeRoomsFor,
 } from '@core';
 import { useStore, type GenerateStyle } from '../../src/store';
 import { radius, space, useTheme } from '../../src/theme';
-import { Button, Card, Chip, Empty, Icon, Pill, Row, Screen, SectionTitle, Segmented, Sheet, T, useWide } from '../../src/ui';
+import { Button, Card, Chip, Empty, Icon, Pill, Row, Screen, SectionTitle, Segmented, Sheet, T, useToast, useWide } from '../../src/ui';
 
 type Kind = 'all' | 'division' | 'teacher' | 'room';
 
@@ -66,6 +67,32 @@ function SessionTile({ session, view, onPress, compact }: { session: ScheduledSe
         {session.duration_slots > 1 && !compact ? ` · ${session.duration_slots} periods` : ''}
       </T>
     </Pressable>
+  );
+}
+
+/** Why a class is missing a room, with a one-tap fix. */
+function RoomRepair() {
+  const store = useStore();
+  const toast = useToast();
+  const count = store.sessionsNeedingRoom.length;
+  if (!count) return null;
+  return (
+    <Card tone="warn" style={{ marginTop: space.md, gap: space.sm }}>
+      <T v="h3">
+        {count} class{count === 1 ? ' has' : 'es have'} no room
+      </T>
+      <T v="small">The room was deleted. Teachers can’t be told until this is sorted.</T>
+      <Button
+        label="Give them free rooms"
+        icon="flash-outline"
+        size="sm"
+        style={{ alignSelf: 'flex-start' }}
+        onPress={() => {
+          const left = store.fixRooms();
+          toast.show(left ? `${left} couldn’t be placed: no suitable room is free then. Add a room or move the class.` : 'Every class has a room again.');
+        }}
+      />
+    </Card>
   );
 }
 
@@ -120,6 +147,7 @@ export default function Timetable() {
   const store = useStore();
   const { profile, sessions, slots, names, current, versions, problems, conflicts, unplaced, diagnostics } = store;
   const { c } = useTheme();
+  const toast = useToast();
   const wide = useWide();
   const days = profile.institution.workingDays;
   const [kind, setKind] = useState<Kind>('division');
@@ -193,13 +221,26 @@ export default function Timetable() {
         </View>
         <Row gap={8} wrap>
           <Button label="New version" icon="refresh" kind="secondary" onPress={() => setPicking(true)} />
-          <Button
-            label={current?.status === 'approved' ? 'Approved' : 'Approve'}
-            icon={current?.status === 'approved' ? 'checkmark-done' : 'checkmark'}
-            kind={current?.status === 'approved' ? 'secondary' : 'primary'}
-            disabled={!!conflicts.length}
-            onPress={() => run(async () => (await store.setApproved(current?.status !== 'approved'), current?.status === 'approved' ? 'Reopened for edits.' : 'Approved. Today, Cover and attendance now use this version.'))}
-          />
+          {current?.status === 'approved' ? (
+            <>
+              <Button label="Undo approval" kind="ghost" onPress={() => run(async () => (await store.setApproved(false), 'Back to a draft. Today and Cover use the newest version until you approve one.'))} />
+              <Button label={store.pendingUpdate.recipients.length ? `Tell ${store.pendingUpdate.recipients.length} teacher${store.pendingUpdate.recipients.length === 1 ? '' : 's'}` : 'Updates'} icon="paper-plane" kind={store.pendingUpdate.recipients.length ? 'primary' : 'secondary'} onPress={() => router.push('/updates')} />
+            </>
+          ) : (
+            <Button
+              label="Approve"
+              icon="checkmark"
+              disabled={!!conflicts.length || store.sessionsNeedingRoom.length > 0}
+              onPress={async () => {
+                try {
+                  await store.setApproved(true);
+                  toast.show('Approved. Now let your teachers know.', { label: 'Tell them', onPress: () => router.push('/updates') });
+                } catch (e) {
+                  setMessage(e instanceof Error ? e.message : 'Could not approve it.');
+                }
+              }}
+            />
+          )}
         </Row>
       </Row>
 
@@ -208,6 +249,8 @@ export default function Timetable() {
           <T>{store.busy ?? message}</T>
         </Card>
       ) : null}
+
+      <RoomRepair />
 
       {insights.length > 0 && (
         <View style={{ gap: space.sm, marginTop: space.md }}>
@@ -381,13 +424,25 @@ export default function Timetable() {
       </Sheet>
 
       <Sheet visible={!!opened} onClose={() => setOpen(null)} title={opened ? names[opened.subject_id] : ''}>
-        {opened && <Explain session={opened} onMove={(patch) => store.moveSession(opened.id, patch)} />}
+        {opened && (
+          <Explain
+            session={opened}
+            onMove={(patch, said) => {
+              const { id, day: oldDay, slot, room_id, locked } = opened;
+              store.moveSession(id, patch);
+              if (said) {
+                setOpen(null);
+                toast.show(said, { label: 'Undo', onPress: () => store.moveSession(id, { day: oldDay, slot, room_id, locked }) });
+              }
+            }}
+          />
+        )}
       </Sheet>
     </Screen>
   );
 }
 
-function Explain({ session, onMove }: { session: ScheduledSession; onMove: (patch: Partial<ScheduledSession>) => void }) {
+function Explain({ session, onMove }: { session: ScheduledSession; onMove: (patch: Partial<ScheduledSession>, said?: string) => void }) {
   const { profile, sessions, slots, names, conflicts } = useStore();
   const { c } = useTheme();
   const explanation = explainSession(session, {
@@ -400,6 +455,7 @@ function Explain({ session, onMove }: { session: ScheduledSession; onMove: (patc
     names,
   });
   const clashes = conflicts.filter((x) => x.sessionIds.includes(session.id));
+  const rooms = freeRoomsFor(session, sessions, profile.rooms, slots);
   return (
     <>
       <T v="h3">{explanation.summary}</T>
@@ -421,7 +477,15 @@ function Explain({ session, onMove }: { session: ScheduledSession; onMove: (patc
         <T v="label">{explanation.alternatives.length ? 'Move it to a free time (no clashes)' : 'No other free time fits this session'}</T>
         <Row wrap gap={8}>
           {explanation.alternatives.slice(0, 12).map((alt) => (
-            <Chip key={`${alt.day}${alt.slot}`} label={`${alt.day.slice(0, 3)} ${alt.slot.split('-')[0]}`} onPress={() => onMove({ day: alt.day, slot: alt.slot })} />
+            <Chip key={`${alt.day}${alt.slot}`} label={`${alt.day.slice(0, 3)} ${alt.slot.split('-')[0]}`} onPress={() => onMove({ day: alt.day, slot: alt.slot }, `Moved to ${alt.day.slice(0, 3)} ${alt.slot.split('-')[0]}.`)} />
+          ))}
+        </Row>
+      </View>
+      <View style={{ gap: 8 }}>
+        <T v="label">{rooms.length ? `Change the room (now ${names[session.room_id] ?? 'none'})` : 'No other suitable room is free then'}</T>
+        <Row wrap gap={8}>
+          {rooms.slice(0, 12).map((room) => (
+            <Chip key={room.id} label={room.name} icon="business-outline" onPress={() => onMove({ room_id: room.id }, `Moved to ${room.name}.`)} />
           ))}
         </Row>
       </View>

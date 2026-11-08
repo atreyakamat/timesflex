@@ -4,9 +4,7 @@ import { Pressable, View } from 'react-native';
 import {
   absentTeacherIds,
   currentSlotIndex,
-  describePreferences,
   divisionSize,
-  hasLearned,
   isRunAction,
   nextSlotIndex,
   sessionsOnDay,
@@ -27,6 +25,52 @@ const LEVEL: Record<Insight['level'], { icon: IconName; tone: 'danger' | 'warn' 
   tip: { icon: 'bulb', tone: 'accent' },
   good: { icon: 'checkmark-circle', tone: 'ok' },
 };
+
+/** The single most useful thing to do now. */
+function NextStep() {
+  const store = useStore();
+  const { profile, liveSessions, liveVersion, pendingUpdate, sessionsNeedingRoom } = store;
+  const { c } = useTheme();
+  const today = toDateKey(new Date());
+  const needCover = uncoveredPeriods(profile.operations, today, liveSessions, store.slots).length;
+  const step = !profile.teachers.length || !profile.divisions.length || !profile.subjects.length
+    ? { icon: 'list-outline', title: 'Finish setting up', text: 'Add your teachers and classes to get your first timetable.', label: 'Continue setup', href: '/onboarding' }
+    : !liveSessions.length
+      ? { icon: 'sparkles-outline', title: 'Build your timetable', text: 'Three different versions to compare, usually in under a minute.', label: 'Go to timetable', href: '/timetable' }
+      : sessionsNeedingRoom.length
+        ? { icon: 'business-outline', title: `${sessionsNeedingRoom.length} class${sessionsNeedingRoom.length === 1 ? ' has' : 'es have'} no room`, text: 'A room was deleted. It takes one tap to fix.', label: 'Fix it', href: '/timetable' }
+        : needCover
+          ? { icon: 'swap-horizontal-outline', title: `${needCover} period${needCover === 1 ? '' : 's'} need cover today`, text: 'Fair substitutes can be picked for you.', label: 'Arrange cover', href: '/cover' }
+          : liveVersion?.status !== 'approved'
+            ? { icon: 'checkmark-done-outline', title: 'Approve your timetable', text: 'Pick the version you like. Today, Cover and attendance then use it.', label: 'Review it', href: '/timetable' }
+            : pendingUpdate.recipients.length
+              ? { icon: 'paper-plane-outline', title: `Tell ${pendingUpdate.recipients.length} teacher${pendingUpdate.recipients.length === 1 ? '' : 's'}`, text: pendingUpdate.title === 'New timetable' ? 'They haven’t seen the timetable yet.' : 'Your changes haven’t reached them yet.', label: 'See who', href: '/updates' }
+              : null;
+  if (!step) {
+    return (
+      <Card tone="ok" style={{ marginBottom: space.md }}>
+        <Row gap={10}>
+          <Icon name="checkmark-circle" size={24} color={c.ok} />
+          <T v="h3" style={{ flex: 1 }}>
+            You’re all caught up
+          </T>
+        </Row>
+      </Card>
+    );
+  }
+  return (
+    <Card tone="accent" style={{ gap: space.md, marginBottom: space.md }}>
+      <Row gap={12}>
+        <Icon name={step.icon as IconName} size={26} color={c.accent} />
+        <View style={{ flex: 1 }}>
+          <T v="h2">{step.title}</T>
+          <T v="small">{step.text}</T>
+        </View>
+      </Row>
+      <Button label={step.label} icon="arrow-forward" style={{ alignSelf: 'flex-start' }} onPress={() => router.push(step.href as never)} />
+    </Card>
+  );
+}
 
 function InsightCard({ insight }: { insight: Insight }) {
   const { c } = useTheme();
@@ -99,6 +143,8 @@ export default function Home() {
         </T>
       </View>
 
+      <NextStep />
+
       <Pressable onPress={() => router.push('/assistant')} accessibilityRole="button" accessibilityLabel="Ask TimeFlex">
         <View style={{ borderRadius: radius.lg, borderWidth: 1, borderColor: c.borderStrong }}>
           <View style={{ backgroundColor: c.glassStrong, borderRadius: radius.lg - 1, padding: space.lg, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -114,9 +160,11 @@ export default function Home() {
         </View>
       </Pressable>
 
-      {liveSessions.length > 0 && (
+      {liveSessions.length > 0 && !profile.institution.workingDays.includes(weekday) ? <T style={{ marginTop: space.lg }}>No classes today, as it’s {weekday}.</T> : null}
+
+      {liveSessions.length > 0 && profile.institution.workingDays.includes(weekday) && (
         <>
-          <SectionTitle title={profile.institution.workingDays.includes(weekday) ? 'Today' : `No classes on ${weekday}`} action={<Button label="Open today" kind="ghost" size="sm" onPress={() => router.push('/today')} />} />
+          <SectionTitle title="Today" action={<Button label="Open today" kind="ghost" size="sm" onPress={() => router.push('/today')} />} />
           <View style={{ flexDirection: wide ? 'row' : 'column', gap: space.md }}>
             <Card style={{ flex: 1, gap: 6 }}>
               <T v="small">Right now</T>
@@ -147,30 +195,12 @@ export default function Home() {
         </>
       )}
 
-      <SectionTitle title="What I noticed" action={<Pill label={`${insights.filter((i) => i.level === 'blocker').length} to fix`} tone={insights.some((i) => i.level === 'blocker') ? 'danger' : 'ok'} />} />
+      <SectionTitle title="What I noticed" action={insights.some((i) => i.level === 'blocker') ? <Pill label={`${insights.filter((i) => i.level === 'blocker').length} to fix`} tone="danger" /> : undefined} />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
-        {ordered.slice(0, 6).map((insight) => (
+        {ordered.slice(0, 3).map((insight) => (
           <InsightCard key={insight.id} insight={insight} />
         ))}
       </View>
-
-      <SectionTitle title="Your taste" />
-      <Card style={{ gap: 8 }}>
-        <Row gap={10}>
-          <Icon name="bulb-outline" size={22} color={c.accent2} />
-          <T v="h3" style={{ flex: 1 }}>
-            {describePreferences(profile.learning)}
-          </T>
-        </Row>
-        {profile.learning.history.slice(0, 3).map((line, i) => (
-          <T key={i} v="small">
-            • {line}
-          </T>
-        ))}
-        {hasLearned(profile.learning) && (
-          <Button label="Build a timetable in your style" icon="sparkles" size="sm" onPress={() => store.generate('yours').then(() => router.push('/timetable'))} loading={!!store.busy} style={{ alignSelf: 'flex-start' }} />
-        )}
-      </Card>
 
       <SectionTitle title="Your department" />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>

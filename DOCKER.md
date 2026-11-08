@@ -49,6 +49,27 @@ If Qwen is still downloading, slow or down, the rules keep working. For rules on
 They live in `.env`, explained in `.env.example`. To keep the app private to your Tailscale network, set
 `WEB_BIND` to the machine's Tailscale address (`tailscale ip -4`).
 
+## Telling teachers on WhatsApp
+
+**Works with no setup:** the Updates screen opens WhatsApp with each teacher's message ready, and you tap send.
+For a group, it opens WhatsApp with a summary, and you pick the group.
+
+**To send automatically** through WhatsApp's official API, you need a Meta developer app with the WhatsApp product:
+
+1. Note the **phone number ID** and create a permanent **system user token** with the
+   `whatsapp_business_messaging` permission.
+2. Submit a Utility message template named `timetable_update` for approval, with this body:
+   `Hello {{1}}, there is an update from {{2}}: {{3}}`
+3. Add `WHATSAPP_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` to `.env` and run `./deploy.sh` again.
+4. For delivered and read ticks, point the app's webhook at `https://your.domain/api/webhooks/whatsapp`, and add
+   `WHATSAPP_APP_SECRET` and a `WHATSAPP_VERIFY_TOKEN` you make up. This needs a public HTTPS address, so it can't
+   work while the server is only on Tailscale.
+
+Teachers must have agreed to receive these messages: Meta requires it. Meta also charges per message.
+
+**Groups:** WhatsApp's API can't post into groups people already have. Its Groups API only works with groups it
+creates, capped at 8 people, and needs an Official Business Account. That's why group posts are a one-tap share.
+
 ## Someone forgot their password
 
 There's no e-mail reset yet. Run this on the server and pass on the temporary password it prints:

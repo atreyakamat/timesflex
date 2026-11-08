@@ -34,7 +34,7 @@ RUN ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,a
 
 # Fail here, not on someone's phone, if the APK cannot be installed.
 RUN mkdir /out && cp app/build/outputs/apk/release/app-release.apk /out/TimeFlex.apk \
-  && $ANDROID_HOME/build-tools/*/apksigner verify /out/TimeFlex.apk
+  && "$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)/apksigner" verify /out/TimeFlex.apk
 
 FROM scratch
 COPY --from=build /out/TimeFlex.apk /TimeFlex.apk

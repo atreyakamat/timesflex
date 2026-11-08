@@ -1,13 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, type ComponentProps, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import type { Ref } from 'react';
 import {
   ActivityIndicator,
   Animated,
-  Easing,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -37,33 +35,80 @@ export const useWide = () => useWindowDimensions().width >= 900;
 
 /* ---------- Background ---------- */
 
-/** Soft colour blobs drifting behind glass surfaces. */
+/**
+ * A faint glow from the top. It's a plain gradient on purpose: a full-screen blur on every
+ * screen is the most expensive thing a phone can be asked to draw while scrolling.
+ */
 export function Background() {
   const { c } = useTheme();
-  const drift = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(drift, { toValue: 1, duration: 14000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(drift, { toValue: 0, duration: 14000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [drift]);
-  const move = (x: number, y: number) => ({
-    transform: [
-      { translateX: drift.interpolate({ inputRange: [0, 1], outputRange: [0, x] }) },
-      { translateY: drift.interpolate({ inputRange: [0, 1], outputRange: [0, y] }) },
-    ],
-  });
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: c.bg, overflow: 'hidden' }]}>
-      <Animated.View style={[styles.blob, { backgroundColor: c.blob[0], opacity: c.blobOpacity, top: -320, left: '15%' }, move(50, 20)]} />
-      <Animated.View style={[styles.blob, { backgroundColor: c.blob[1], opacity: c.blobOpacity * 0.6, top: -300, right: '-10%' }, move(-40, 30)]} />
-      {Platform.OS !== 'web' && <BlurView intensity={60} tint={c.name} style={StyleSheet.absoluteFill} />}
-      {Platform.OS === 'web' && <View style={[StyleSheet.absoluteFill, { backdropFilter: 'blur(110px)' } as ViewStyle]} />}
+      <LinearGradient colors={[`${c.blob[0]}${c.name === 'dark' ? '30' : '40'}`, `${c.blob[0]}00`]} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 320 }} />
     </View>
+  );
+}
+
+/* ---------- Toasts ---------- */
+
+type ToastAction = { label: string; onPress: () => void };
+const ToastContext = createContext<{ show: (text: string, action?: ToastAction) => void }>({ show: () => {} });
+export const useToast = () => useContext(ToastContext);
+
+/** A short message that comes and goes without getting in the way, with an optional Undo. */
+export function ToastProvider({ children }: { children: ReactNode }) {
+  const { c } = useTheme();
+  const insets = useSafeAreaInsets();
+  const wide = useWide();
+  const [toast, setToast] = useState<{ text: string; action?: ToastAction } | null>(null);
+  const shown = useRef(new Animated.Value(0)).current;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hide = useCallback(() => {
+    Animated.timing(shown, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => setToast(null));
+  }, [shown]);
+  const show = useCallback(
+    (text: string, action?: ToastAction) => {
+      if (timer.current) clearTimeout(timer.current);
+      setToast({ text, action });
+      Animated.spring(shown, { toValue: 1, friction: 9, tension: 80, useNativeDriver: true }).start();
+      timer.current = setTimeout(hide, action ? 6000 : 3500);
+    },
+    [hide, shown],
+  );
+  const value = useMemo(() => ({ show }), [show]);
+  return (
+    <ToastContext.Provider value={value}>
+      {children}
+      {toast ? (
+        <Animated.View
+          pointerEvents="box-none"
+          style={{
+            position: 'absolute',
+            left: 16,
+            right: 16,
+            bottom: insets.bottom + (wide ? 24 : 96),
+            alignItems: 'center',
+            opacity: shown,
+            transform: [{ translateY: shown.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }],
+          }}
+        >
+          <View accessibilityLiveRegion="polite" role="status" style={{ flexDirection: 'row', alignItems: 'center', gap: 12, maxWidth: 520, backgroundColor: c.primary, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 16 }}>
+            <Text style={{ color: c.onPrimary, fontWeight: '600', fontSize: 14, flexShrink: 1 }}>{toast.text}</Text>
+            {toast.action ? (
+              <Pressable
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={() => {
+                  toast.action?.onPress();
+                  hide();
+                }}
+              >
+                <Text style={{ color: c.onPrimary, fontWeight: '800', fontSize: 14, textDecorationLine: 'underline' }}>{toast.action.label}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </Animated.View>
+      ) : null}
+    </ToastContext.Provider>
   );
 }
 
@@ -474,7 +519,7 @@ export function Sheet({ visible, onClose, children, title }: { visible: boolean;
   const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType={wide ? 'fade' : 'slide'} onRequestClose={onClose}>
-      <Pressable accessibilityLabel="Close" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(8,10,20,0.45)' }]} onPress={onClose} />
+      <Pressable accessibilityLabel="Close" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(8,10,20,0.6)' }]} onPress={onClose} />
       <View
         pointerEvents="box-none"
         style={[StyleSheet.absoluteFill, { justifyContent: wide ? 'center' : 'flex-end', alignItems: 'center', padding: wide ? space.xl : 0 }]}
@@ -484,7 +529,7 @@ export function Sheet({ visible, onClose, children, title }: { visible: boolean;
             width: '100%',
             maxWidth: wide ? 560 : undefined,
             maxHeight: '90%',
-            backgroundColor: c.glassStrong,
+            backgroundColor: c.surface,
             borderRadius: radius.xl,
             borderBottomLeftRadius: wide ? radius.xl : 0,
             borderBottomRightRadius: wide ? radius.xl : 0,
@@ -493,8 +538,7 @@ export function Sheet({ visible, onClose, children, title }: { visible: boolean;
             overflow: 'hidden',
           }}
         >
-          {Platform.OS !== 'web' && <BlurView intensity={80} tint={c.name} style={StyleSheet.absoluteFill} />}
-          <View style={{ backgroundColor: c.name === 'dark' ? 'rgba(20,26,40,0.7)' : 'rgba(255,255,255,0.75)' }}>
+          <View>
             {!wide && <View style={{ alignSelf: 'center', width: 44, height: 5, borderRadius: 3, backgroundColor: c.borderStrong, marginTop: 10 }} />}
             <Row style={{ justifyContent: 'space-between', paddingHorizontal: space.lg, paddingTop: space.md }}>
               <T v="h2" style={{ flex: 1 }}>
@@ -513,7 +557,6 @@ export function Sheet({ visible, onClose, children, title }: { visible: boolean;
 }
 
 const styles = StyleSheet.create({
-  blob: { position: 'absolute', width: 640, height: 520, borderRadius: 320 },
   card: {
     borderRadius: radius.lg,
     borderWidth: 1,

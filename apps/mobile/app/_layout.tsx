@@ -1,8 +1,35 @@
-import { Stack } from 'expo-router';
+import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { View } from 'react-native';
 import { StoreProvider } from '../src/store';
-import { ThemeProvider, useTheme } from '../src/theme';
+import { ThemeProvider, space, useTheme } from '../src/theme';
+import { Button, Icon, T, ToastProvider } from '../src/ui';
+
+/** If a screen ever crashes, offer a way back instead of a blank page. Saved work is on the server. */
+export function ErrorBoundary({ retry }: ErrorBoundaryProps) {
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <Oops retry={retry} />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
+
+function Oops({ retry }: { retry: () => Promise<void> }) {
+  const { c } = useTheme();
+  return (
+    <View style={{ flex: 1, backgroundColor: c.bg, alignItems: 'center', justifyContent: 'center', padding: space.xl, gap: space.md }}>
+      <Icon name="refresh-circle-outline" size={48} color={c.accent} />
+      <T v="h2" style={{ textAlign: 'center' }}>
+        Something went wrong on this screen
+      </T>
+      <T style={{ textAlign: 'center', maxWidth: 420 }}>Your saved work is safe. Try again, and if it keeps happening, restart the app.</T>
+      <Button label="Try again" onPress={retry} />
+    </View>
+  );
+}
 
 function Shell() {
   const { c } = useTheme();
@@ -21,7 +48,9 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ThemeProvider>
         <StoreProvider>
-          <Shell />
+          <ToastProvider>
+            <Shell />
+          </ToastProvider>
         </StoreProvider>
       </ThemeProvider>
     </SafeAreaProvider>

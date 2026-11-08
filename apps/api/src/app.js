@@ -22,6 +22,7 @@ import {
 } from './auth.js';
 import { DuplicateEmailError } from './db.js';
 import { interpretCommand } from './intent.js';
+import { mountNotices, mountWhatsAppWebhook } from './notices.js';
 import { aiStatus } from './llm.js';
 import { parseRequirements } from './parser.js';
 import { SolverRejectedError, solveWithSolver } from './solverClient.js';
@@ -41,7 +42,7 @@ const publicInstitution = ({ ownerId, ...institution }) => institution;
  * Every route except health, sign-up and login needs a session. An account owns its
  * institution, and every institution or timetable route checks that ownership.
  */
-export const createApp = ({ store, solve = solveWithSolver, loginLimiter = createRateLimiter(), limits = {} }) => {
+export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter = createRateLimiter(), limits = {} }) => {
   // Per address, and many people can share one: a whole college, or everyone on a Docker host that
   // hides real addresses. These only stop floods. Guessing one account has its own tight limit.
   const signupLimiter = limits.signup ?? createRateLimiter({ limit: 100, windowMs: 60 * MINUTE });
@@ -59,6 +60,8 @@ export const createApp = ({ store, solve = solveWithSolver, loginLimiter = creat
   // Unset (development): any origin. In Docker it is empty: the app and API share one address.
   const origins = process.env.CORS_ORIGINS;
   app.use(origins === undefined ? cors() : cors({ origin: origins.split(',').map((item) => item.trim()).filter(Boolean) }));
+  // Meta calls this one, signed, with no session. It reads its own raw body to check the signature.
+  mountWhatsAppWebhook(app, { store });
   // Without a login, only tiny bodies are read. Bigger ones are parsed after the session check.
   app.use('/api/auth', express.json({ limit: '32kb' }));
 
@@ -401,10 +404,13 @@ export const createApp = ({ store, solve = solveWithSolver, loginLimiter = creat
     const updated = await store.updateTimetableSessions(
       existing.id,
       generatedSessions ?? existing.generatedSessions,
-      status ?? 'edited',
+      // A live timetable stays live while it's being adjusted; the Updates screen tracks the changes.
+      status ?? (existing.status === 'approved' ? 'approved' : 'edited'),
     );
     response.json(updated);
   }));
+
+  mountNotices(app, { store, route, fail, ownedInstitution, limits, ...(send && { send }) });
 
   app.use('/api', (request, response) => notFound(response, 'Page'));
 

@@ -11,6 +11,8 @@ export const LIMITS = {
   listItems: 3000,
   savedSessions: 6000,
   solverSeconds: 30,
+  noticeText: 8000,
+  noticeRecipients: 500,
 };
 
 /** A trimmed string no longer than `max`, or null if it is anything else. */

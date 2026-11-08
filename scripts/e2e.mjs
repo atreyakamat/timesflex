@@ -239,8 +239,8 @@ try {
   await click('Choose this');
   await sleep(800);
   await go(`${APP}/home`);
-  await waitFor(`__has('You seem to prefer') || __has('Pick versions and move classes')`, 10000);
-  check('home shows the learned preference line', true);
+  await waitFor(`__has('Approve your timetable')`, 10000);
+  check('home says what to do next', true);
   await shot('05-home');
 
   await go(`${APP}/assistant`);
@@ -257,7 +257,61 @@ try {
   const leave = me.institution?.data?.operations?.absences ?? [];
   check('leave saved on the server', leave.length >= 3, `${leave.length} absence days`);
 
+  // Approve, tell teachers, change a room, and see that only the affected teacher needs telling.
+  const openWindows = `(window.__opened = [], window.open = (url) => { window.__opened.push(url); return null; }, true)`;
+  await go(`${APP}/timetable`);
+  await waitFor(`__has('Compare versions')`, 15000);
+  await click('Approve');
+  await waitFor(`__has('Now let your teachers know')`, 10000);
+  check('approving prompts to tell the teachers', true);
+  await go(`${APP}/updates`);
+  await evaluate(openWindows);
+  await waitFor(`__has('Prepare the messages')`, 10000);
+  check('a new timetable means every teacher needs telling', await has('New timetable'));
+  await shot('08-updates-ready');
+  await click('Prepare the messages');
+  await waitFor(`__has('0 of') && __has('Send to ')`, 10000);
+  check('nothing new is waiting once messages are prepared', await has('Nothing new to tell anyone'));
+  await shot('09-updates-tracking');
+  await click('Send to ', false);
+  await waitFor(`__has('Did you send it to') && __has('Yes, sent')`, 5000);
+  const opened = await evaluate(`window.__opened[0] ?? ''`);
+  check('WhatsApp opens with the teacher’s number and own message', /^https:\/\/wa\.me\/\d+\?text=Hello/.test(opened), opened.slice(0, 40));
+  await click('Yes, sent');
+  await waitFor(`__has('1 of')`, 5000);
+  check('sent teachers are counted as told', true);
+  check('it moves straight on to the next teacher', await has('Send to '));
+  await shot('10-updates-one-told');
+  await sleep(1000);
+
+  await go(`${APP}/timetable`);
+  await waitFor(`__has('Compare versions')`, 15000);
+  await evaluate(`(() => { const tile = [...document.querySelectorAll('[aria-label$="Tap for details"]')].find(__visible); tile.click(); return true; })()`);
+  await waitFor(`__has('Change the room')`, 5000);
+  await sleep(500);
+  await shot('11-change-room');
+  check('a class offers free rooms to change to', true);
+  await evaluate(`(() => { const label = [...document.querySelectorAll('div')].find((d) => __visible(d) && d.children.length === 0 && d.textContent.startsWith('Change the room')); const chip = label.parentElement.querySelector('[role="button"]'); chip.click(); return true; })()`);
+  await waitFor(`__has('Undo')`, 5000);
+  await sleep(500);
+  await shot('12-undo');
+  check('changing a room offers Undo', true);
+  await sleep(1500);
+  await go(`${APP}/updates`);
+  await waitFor(`__has('1 timetable change')`, 10000);
+  check('the room change is waiting to be told', await has('teacher'));
+  await shot('13-updates-after-change');
+
+  const statusAfter = await (await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  check('the timetable stayed approved through the change', Boolean(statusAfter.institution));
+  const tts = await (await fetch(`${API}/api/institutions/${statusAfter.institution.id}/timetables`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  check('it is still the approved version', tts.some((t) => t.status === 'approved'));
+
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await go(`${APP}/updates`);
+  await waitFor(`__has('Tell your teachers')`, 10000);
+  check('updates fits a phone screen', (await evaluate(`document.documentElement.scrollWidth - window.innerWidth`)) <= 0);
+  await shot('14-phone-updates');
   await go(`${APP}/timetable`);
   await waitFor(`__has('Mon') && __has('Timetable')`, 10000);
   const overflow = await evaluate(`document.documentElement.scrollWidth - window.innerWidth`);

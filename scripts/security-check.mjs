@@ -81,6 +81,29 @@ for (const [name, method, url, body] of attacks) {
 const stillThere = await call('GET', inst, { token: alice.token });
 check('the victim’s data is untouched', stillThere.json?.name === alice.institution.name, stillThere.json?.name);
 
+/* ---------- Updates and WhatsApp ---------- */
+await call('PUT', inst, { token: alice.token, body: { name: alice.institution.name, type: 'college', profile: { teachers: [{ id: 't1', name: 'T', phone: '9876543210' }] } } });
+const noticeBody = { title: 'x', kind: 'timetable', groupText: 'g', recipients: [{ teacherId: 't1', text: 'hello', summary: 'hello' }] };
+const notice = await call('POST', `${inst}/notices`, { token: alice.token, body: noticeBody });
+check('owner can create an update (control)', notice.status === 201, notice.status);
+for (const [name, method, url, body] of [
+  ['read another college’s updates', 'GET', `${inst}/notices`],
+  ['add an update to another college', 'POST', `${inst}/notices`, noticeBody],
+  ['change another college’s update', 'PUT', `/api/notices/${notice.json?.id}/recipients/t1`, { status: 'skipped' }],
+  ['send another college’s update', 'POST', `/api/notices/${notice.json?.id}/send`],
+]) {
+  const r = await call(method, url, { token: mallory.token, body });
+  check(`cannot ${name}`, r.status === 404 || (r.status === 409 && name.startsWith('send')), r.status);
+}
+const stranger = await call('POST', `${inst}/notices`, { token: alice.token, body: { ...noticeBody, recipients: [{ teacherId: 'someone-else', text: 'spam', summary: 'spam' }] } });
+check('messages only go to the college’s own teachers', stranger.status === 400, stranger.status);
+const forgedHook = await call('POST', '/api/webhooks/whatsapp', { raw: JSON.stringify({ entry: [] }), headers: { 'X-Hub-Signature-256': 'sha256=00' } });
+check('a forged delivery update is refused', forgedHook.status === 401, forgedHook.status);
+const unsignedHook = await call('POST', '/api/webhooks/whatsapp', { raw: '{}' });
+check('an unsigned delivery update is refused', unsignedHook.status === 401, unsignedHook.status);
+const hookCheck = await call('GET', '/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=&hub.challenge=x');
+check('the webhook handshake needs the secret', hookCheck.status === 403, hookCheck.status);
+
 /* ---------- Injection and bad input ---------- */
 for (const payload of ["' OR '1'='1' --", "'; DROP TABLE accounts; --"]) {
   const r = await call('POST', '/api/auth/login', { body: { email: payload, password: payload } });
