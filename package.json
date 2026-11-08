@@ -20,6 +20,11 @@
     "app:build-web": "npm --prefix apps/mobile run export:web -- --output-dir dist-web",
     "app:serve": "node scripts/serve-app.mjs apps/mobile/dist-web 8081",
     "test:e2e": "node scripts/e2e.mjs",
-    "demo": "node scripts/demo.mjs"
+    "test:security": "node scripts/security-check.mjs",
+    "demo": "node scripts/demo.mjs",
+    "docker:up": "sh deploy.sh",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "docker:apk": "node scripts/build-apk.mjs"
   }
 }

@@ -1,9 +1,10 @@
 import { Redirect, router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Platform, View, useWindowDimensions } from 'react-native';
+import { api, changeServer } from '../src/api';
 import { useStore } from '../src/store';
 import { radius, space, useTheme } from '../src/theme';
-import { Button, Card, Gradient, Icon, IconButton, Row, Screen, T, type IconName } from '../src/ui';
+import { Button, Card, Field, Gradient, Icon, IconButton, Row, Screen, T, type IconName } from '../src/ui';
 
 const FEATURES: { icon: IconName; title: string; text: string }[] = [
   { icon: 'chatbubble-ellipses-outline', title: 'An assistant that sets it up', text: 'Answer a few friendly questions or just type “Mehta is away Friday”. It shows the change and you approve.' },
@@ -15,9 +16,9 @@ const FEATURES: { icon: IconName; title: string; text: string }[] = [
 ];
 
 const STEPS = [
-  ['Create your account', 'One account for your department. A minute.'],
-  ['Answer a few questions', 'Days, classes, teachers, rooms, subjects. The assistant fills the rest.'],
-  ['Pick your favourite version', 'Generate several, compare, approve, share.'],
+  ['Create your institution', 'A name, your e-mail and a password. One minute.'],
+  ['Add your teachers', 'Who they are and what each can teach. Subjects and rooms are worked out for you.'],
+  ['Pick your favourite version', 'Three clash-free timetables in under a minute. Compare, approve, share.'],
 ];
 
 /** A stack of tilted glass timetable cards that slowly turn, with school icons orbiting. */
@@ -102,24 +103,57 @@ function Stage({ size }: { size: number }) {
   );
 }
 
+/** Phone app only: which server it talks to. The address changes between networks. */
+function ServerAddress() {
+  const { c } = useTheme();
+  const [address, setAddress] = useState(api.base());
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  if (Platform.OS === 'web') return null;
+  if (!editing) {
+    return (
+      <Row gap={8} wrap>
+        <T v="small">Server: {api.base()}</T>
+        <Button label="Change" kind="ghost" size="sm" onPress={() => setEditing(true)} />
+      </Row>
+    );
+  }
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      setAddress(await changeServer(address));
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reach that server.');
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Card style={{ gap: space.sm }}>
+      <Field label="Server address" value={address} onChangeText={setAddress} autoCapitalize="none" autoCorrect={false} keyboardType="url" placeholder="http://192.168.1.20:8080" />
+      {error ? <T color={c.danger}>{error}</T> : null}
+      <Row gap={8}>
+        <Button label="Save" size="sm" loading={saving} disabled={!address.trim()} onPress={save} />
+        <Button label="Cancel" kind="ghost" size="sm" onPress={() => setEditing(false)} />
+      </Row>
+    </Card>
+  );
+}
+
 export default function Welcome() {
-  const { account, ready, signUp } = useStore();
+  const { account, ready, startDemo: openDemo } = useStore();
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoError, setDemoError] = useState('');
 
-  /** One tap for a pitch: a throwaway account, a full sample college, three versions. */
+  /** One tap for a pitch: a throwaway account made by the server, a full sample college, three versions. */
   const startDemo = async () => {
     setDemoBusy(true);
     setDemoError('');
     try {
-      const id = Math.random().toString(36).slice(2, 10);
-      await signUp({
-        institutionName: 'Demo College of Engineering',
-        institutionType: 'college',
-        name: 'Prof. Demo',
-        email: `demo-${id}@demo.timeflex.app`,
-        password: `demo-${id}-${Math.random().toString(36).slice(2)}`,
-      });
+      await openDemo();
       router.replace('/onboarding?demo=1');
     } catch (e) {
       setDemoError(e instanceof Error ? e.message : 'Could not start the demo.');
@@ -170,6 +204,7 @@ export default function Welcome() {
             <Button label="Create your account" kind="secondary" size="lg" onPress={() => router.push('/auth?mode=signup')} />
           </Row>
           {demoError ? <T color={c.danger}>{demoError}</T> : null}
+          <ServerAddress />
           <Row gap={16} wrap>
             {['No clashes, ever', 'Labs in batches', 'Explains every choice'].map((item) => (
               <Row key={item} gap={6}>
@@ -220,7 +255,7 @@ export default function Welcome() {
           Plan this semester in one sitting.
         </T>
         <T color="rgba(255,255,255,0.85)" style={{ textAlign: 'center' }}>
-          Runs on your own server. Your data never leaves the college.
+          Add your teachers, and get three clash-free timetables to choose from.
         </T>
         <Button label="Create your account" kind="secondary" size="lg" onPress={() => router.push('/auth?mode=signup')} />
       </Gradient>

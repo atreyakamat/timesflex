@@ -31,7 +31,8 @@
       "expo-router",
       "expo-secure-store",
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }]
     ],
     "scheme": "timeflex",
     "description": "Clash-free school and college timetables with an assistant that learns how you like them.",

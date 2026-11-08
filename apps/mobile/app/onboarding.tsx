@@ -1,71 +1,37 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Animated, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
 import {
   applyActions,
   batchNames,
   buildSlots,
-  createId,
-  hasExpertise,
-  mergeDraft,
   nextName,
+  parseSubjectList,
+  parseTeacherLines,
+  seedRooms,
+  seedSubjects,
+  setupEstimate,
   setupInsights,
+  teachableSubjects,
+  teachersFor,
   type InstitutionForm,
+  type LoadLine,
   type RoomForm,
 } from '@core';
-import { api } from '../src/api';
 import { useStore, type Profile } from '../src/store';
 import { radius, space, useTheme } from '../src/theme';
-import { ActivityIndicator } from 'react-native';
-import { Background, Button, Card, Chip, Field, Gradient, Icon, IconButton, Progress, Row, Segmented, Stepper, T } from '../src/ui';
+import { Background, Button, Card, Chip, Field, Icon, IconButton, Progress, Row, Segmented, Stepper, T } from '../src/ui';
 
 /**
- * First-run setup as a conversation. The assistant asks one thing at a time, the answer
- * is applied immediately (and autosaved), and the last step checks everything, offers
- * one-tap fixes, and builds a few versions to compare.
+ * First-run setup, one screen at a time. The institution already exists from sign-up, so it
+ * starts with teachers and what they can teach. Classes and the week follow; subjects and rooms
+ * are worked out from those answers, and the last screen shows how full the week will be.
  */
 
-type Step = 'start' | 'describe' | 'days' | 'hours' | 'periods' | 'break' | 'department' | 'classes' | 'teachers' | 'rooms' | 'subjects' | 'review';
-const FLOW: Step[] = ['days', 'hours', 'periods', 'break', 'department', 'classes', 'teachers', 'rooms', 'subjects', 'review'];
-const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-function Bubble({ from, children }: { from: 'ai' | 'me'; children: ReactNode }) {
-  const { c } = useTheme();
-  const appear = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.spring(appear, { toValue: 1, useNativeDriver: true, friction: 8 }).start();
-  }, [appear]);
-  const style = {
-    opacity: appear,
-    transform: [{ translateY: appear.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }],
-  };
-  if (from === 'me') {
-    return (
-      <Animated.View style={[{ alignSelf: 'flex-end', maxWidth: '85%' }, style]}>
-        <View style={{ backgroundColor: c.primary, borderRadius: 18, borderBottomRightRadius: 6, paddingVertical: 10, paddingHorizontal: 14 }}>
-          <T color={c.onPrimary} style={{ fontWeight: '600' }}>
-            {children}
-          </T>
-        </View>
-      </Animated.View>
-    );
-  }
-  return (
-    <Animated.View style={[{ flexDirection: 'row', gap: 10, alignItems: 'flex-end', maxWidth: '92%' }, style]}>
-      <Gradient style={{ width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' }}>
-        <Icon name="sparkles" size={16} color="#fff" />
-      </Gradient>
-      <View style={{ flexShrink: 1, backgroundColor: c.glassStrong, borderRadius: 18, borderBottomLeftRadius: 6, paddingVertical: 10, paddingHorizontal: 14, borderWidth: 1, borderColor: c.glassBorder }}>
-        {typeof children === 'string' ? <T style={{ color: c.text }}>{children}</T> : children}
-      </View>
-    </Animated.View>
-  );
-}
-
-/** /onboarding?demo=1 prepares a full sample college with no questions; otherwise the conversation. */
+/** /onboarding?demo=1 prepares a full sample college with no questions; otherwise the steps. */
 export default function Onboarding() {
   const { demo } = useLocalSearchParams<{ demo?: string }>();
-  return demo ? <DemoSetup /> : <Conversation />;
+  return demo ? <DemoSetup /> : <Wizard />;
 }
 
 const DEMO_STEPS = ['Creating a sample engineering department', 'Adding 7 teachers, 116 students, 6 rooms and 8 subjects', 'Building 3 clash-free timetable versions', 'Ready'];
@@ -139,285 +105,169 @@ function DemoSetup() {
   );
 }
 
-function Conversation() {
-  const store = useStore();
-  const { profile, update, account } = store;
-  const { c } = useTheme();
-  const [step, setStep] = useState<Step>('start');
-  const [said, setSaid] = useState<{ q: string; a: string }[]>([]);
-  const scroll = useRef<ScrollView>(null);
-  const first = account?.name.replace(/^(prof|dr|mr|mrs|ms)\.?\s+/i, '').split(' ')[0] ?? 'there';
+/** Time still ahead when each step opens, shown so nobody wonders how long this will take. */
+type Step = 'teachers' | 'classes' | 'week' | 'subjects' | 'rooms' | 'review';
+const STEPS: { id: Exclude<Step, 'review'>; minutes: number }[] = [
+  { id: 'teachers', minutes: 5 },
+  { id: 'classes', minutes: 3 },
+  { id: 'week', minutes: 2 },
+  { id: 'subjects', minutes: 2 },
+  { id: 'rooms', minutes: 1 },
+];
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const ORDER: Step[] = ['teachers', 'classes', 'week', 'subjects', 'rooms', 'review'];
+const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
-  const setInst = (patch: Partial<InstitutionForm>) => update((p) => ({ ...p, institution: { ...p.institution, ...patch } }));
-  const answer = (question: string, reply: string, next: Step) => {
-    setSaid((list) => [...list, { q: question, a: reply }]);
+/** Coming back later picks up where the information runs out. */
+const firstUnfinished = (profile: Profile): Step => {
+  if (!profile.teachers.length) return 'teachers';
+  if (!profile.divisions.length) return 'classes';
+  if (!profile.subjects.length) return 'week';
+  if (!profile.rooms.length) return 'rooms';
+  return 'review';
+};
+
+function Wizard() {
+  const store = useStore();
+  const { profile, update } = store;
+  const [step, setStep] = useState<Step>(() => firstUnfinished(profile));
+
+  const goTo = (next: Step) => {
+    // Subjects and rooms are worked out from what came before, ready to change.
+    if (next === 'subjects') update((p) => seedSubjects(p));
+    if (next === 'rooms') update((p) => seedRooms(p));
     setStep(next);
-    setTimeout(() => scroll.current?.scrollToEnd({ animated: true }), 120);
   };
-  const nextOf = (current: Step) => FLOW[Math.min(FLOW.length - 1, FLOW.indexOf(current) + 1)];
-  const progress = step === 'start' || step === 'describe' ? 0 : (FLOW.indexOf(step) + 1) / FLOW.length;
+  const forward = () => goTo(ORDER[ORDER.indexOf(step) + 1]);
+  const back = () => setStep(ORDER[Math.max(0, ORDER.indexOf(step) - 1)]);
   const finish = (to: '/home' | '/timetable') => {
     store.finishOnboarding();
     router.replace(to);
   };
+  const useSample = () => {
+    store.loadSample();
+    setStep('review');
+  };
 
-  const slotsNoBreak = buildSlots(profile.institution.startTime, profile.institution.endTime, profile.institution.slotDurationMinutes, null, null);
+  const index = STEPS.findIndex((item) => item.id === step);
+  const minutes = STEPS[index]?.minutes;
 
   return (
     <View style={{ flex: 1 }}>
       <Background />
-      <View style={{ flex: 1, width: '100%', maxWidth: 760, alignSelf: 'center', paddingHorizontal: space.lg }}>
-        <Row style={{ justifyContent: 'space-between', paddingTop: space.xl, paddingBottom: space.md }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, width: '100%', maxWidth: 640, alignSelf: 'center', paddingHorizontal: space.lg }}>
+        <Row gap={12} style={{ paddingTop: space.xl, paddingBottom: space.md }}>
+          {step !== 'teachers' ? <IconButton icon="arrow-back" label="Back" onPress={back} /> : null}
           <View style={{ flex: 1, gap: 6 }}>
-            <T v="label">{profile.institution.name || 'Your institution'}</T>
-            <Progress value={progress} />
+            <T v="label">{step === 'review' ? 'Last check' : `Step ${index + 1} of ${STEPS.length} · about ${minutes} minute${minutes === 1 ? '' : 's'} left`}</T>
+            <Progress value={step === 'review' ? 1 : index / STEPS.length} />
           </View>
-          <Button label="Skip for now" kind="ghost" size="sm" onPress={() => finish('/home')} />
+          <Button label="Finish later" kind="ghost" size="sm" onPress={() => finish('/home')} />
         </Row>
 
-        <ScrollView ref={scroll} contentContainerStyle={{ gap: space.md, paddingBottom: space.xxl * 3 }} keyboardShouldPersistTaps="handled">
-          <Bubble from="ai">
-            <T style={{ color: c.text }}>
-              Hi {first}! I’m your timetable assistant. I’ll ask a few quick questions and set things up as we go. Everything saves
-              automatically, so you can stop any time.
-            </T>
-          </Bubble>
-          {said.map((item, index) => (
-            <View key={index} style={{ gap: space.sm }}>
-              <Bubble from="ai">{item.q}</Bubble>
-              <Bubble from="me">{item.a}</Bubble>
-            </View>
-          ))}
-
-          {step === 'start' && (
-            <>
-              <Bubble from="ai">How would you like to begin?</Bubble>
-              <View style={{ gap: space.sm }}>
-                <Card onPress={() => answer('How would you like to begin?', 'Ask me step by step', 'days')}>
-                  <Row gap={12}>
-                    <Icon name="chatbubbles-outline" size={24} color={c.accent} />
-                    <View style={{ flex: 1 }}>
-                      <T v="h3">Ask me step by step</T>
-                      <T v="small">About ten minutes. Recommended.</T>
-                    </View>
-                    <Icon name="chevron-forward" size={20} color={c.muted} />
-                  </Row>
-                </Card>
-                <Card onPress={() => answer('How would you like to begin?', 'I’ll describe it in my own words', 'describe')}>
-                  <Row gap={12}>
-                    <Icon name="create-outline" size={24} color={c.accent} />
-                    <View style={{ flex: 1 }}>
-                      <T v="h3">Let me describe it</T>
-                      <T v="small">Write it like an e-mail; I’ll pick out the details.</T>
-                    </View>
-                    <Icon name="chevron-forward" size={20} color={c.muted} />
-                  </Row>
-                </Card>
-                <Card
-                  onPress={() => {
-                    store.loadSample();
-                    answer('How would you like to begin?', 'Show me with sample data', 'review');
-                  }}
-                >
-                  <Row gap={12}>
-                    <Icon name="flask-outline" size={24} color={c.accent} />
-                    <View style={{ flex: 1 }}>
-                      <T v="h3">Show me with sample data</T>
-                      <T v="small">A complete engineering department to explore.</T>
-                    </View>
-                    <Icon name="chevron-forward" size={20} color={c.muted} />
-                  </Row>
-                </Card>
-              </View>
-            </>
-          )}
-
-          {step === 'describe' && <Describe onDone={(summary) => answer('Tell me about your department.', summary, 'review')} />}
-
-          {step === 'days' && (
-            <Ask question="Which days do you teach?">
-              <Row wrap gap={8}>
-                {DAYS.map((day) => {
-                  const on = profile.institution.workingDays.includes(day);
-                  return (
-                    <Chip
-                      key={day}
-                      label={day.slice(0, 3)}
-                      active={on}
-                      onPress={() => setInst({ workingDays: on ? profile.institution.workingDays.filter((d) => d !== day) : DAYS.filter((d) => d === day || profile.institution.workingDays.includes(d)) })}
-                    />
-                  );
-                })}
-              </Row>
-              <Button
-                label="That’s right"
-                disabled={!profile.institution.workingDays.length}
-                onPress={() => answer('Which days do you teach?', profile.institution.workingDays.map((d) => d.slice(0, 3)).join(', '), 'hours')}
-              />
-            </Ask>
-          )}
-
-          {step === 'hours' && (
-            <Ask question="When does the teaching day start and end?">
-              <Row wrap gap={8}>
-                {[
-                  ['08:00', '14:00'],
-                  ['09:00', '16:00'],
-                  ['09:00', '17:00'],
-                  ['10:00', '17:00'],
-                ].map(([start, end]) => (
-                  <Chip
-                    key={start + end}
-                    label={`${start} – ${end}`}
-                    active={profile.institution.startTime === start && profile.institution.endTime === end}
-                    onPress={() => setInst({ startTime: start, endTime: end })}
-                  />
-                ))}
-              </Row>
-              <Row gap={space.lg} wrap>
-                <Stepper label="Starts (hour)" value={Number(profile.institution.startTime.slice(0, 2))} min={6} max={13} onChange={(h) => setInst({ startTime: `${String(h).padStart(2, '0')}:00` })} />
-                <Stepper label="Ends (hour)" value={Number(profile.institution.endTime.slice(0, 2))} min={11} max={21} onChange={(h) => setInst({ endTime: `${String(h).padStart(2, '0')}:00` })} />
-              </Row>
-              <Button label="Next" disabled={!slotsNoBreak.length} onPress={() => answer('When does the day start and end?', `${profile.institution.startTime} to ${profile.institution.endTime}`, 'periods')} />
-            </Ask>
-          )}
-
-          {step === 'periods' && (
-            <Ask question="How long is one period?">
-              <Row wrap gap={8}>
-                {[40, 45, 50, 55, 60].map((m) => (
-                  <Chip key={m} label={`${m} min`} active={profile.institution.slotDurationMinutes === m} onPress={() => setInst({ slotDurationMinutes: m })} />
-                ))}
-              </Row>
-              <T v="small">That gives {slotsNoBreak.length} periods a day.</T>
-              <Button label="Next" disabled={!slotsNoBreak.length} onPress={() => answer('How long is one period?', `${profile.institution.slotDurationMinutes} minutes`, 'break')} />
-            </Ask>
-          )}
-
-          {step === 'break' && (
-            <Ask question="Is there a lunch or tea break?">
-              <Row wrap gap={8}>
-                <Chip label="No break" active={!profile.institution.breakAfterSlots} onPress={() => setInst({ breakAfterSlots: null, breakDurationMinutes: null })} />
-                {Array.from({ length: Math.max(0, slotsNoBreak.length - 1) }, (_, i) => i + 1)
-                  .filter((n) => n >= 2 && n <= 5)
-                  .map((n) => (
-                    <Chip
-                      key={n}
-                      label={`After period ${n}`}
-                      active={profile.institution.breakAfterSlots === n}
-                      onPress={() => setInst({ breakAfterSlots: n, breakDurationMinutes: profile.institution.breakDurationMinutes || 30 })}
-                    />
-                  ))}
-              </Row>
-              {profile.institution.breakAfterSlots ? (
-                <Row wrap gap={8}>
-                  {[15, 20, 30, 45, 60].map((m) => (
-                    <Chip key={m} label={`${m} min`} active={profile.institution.breakDurationMinutes === m} onPress={() => setInst({ breakDurationMinutes: m })} />
-                  ))}
-                </Row>
-              ) : null}
-              <Button
-                label="Next"
-                onPress={() =>
-                  answer(
-                    'Is there a break?',
-                    profile.institution.breakAfterSlots ? `${profile.institution.breakDurationMinutes} min after period ${profile.institution.breakAfterSlots}` : 'No break',
-                    'department',
-                  )
-                }
-              />
-            </Ask>
-          )}
-
-          {step === 'department' && <DepartmentStep onDone={(text) => answer('Which department is this for?', text, 'classes')} />}
-          {step === 'classes' && <ClassesStep onDone={(text) => answer('Which classes need a timetable?', text, 'teachers')} />}
-          {step === 'teachers' && <TeachersStep onDone={(text) => answer('Who teaches?', text, 'rooms')} />}
-          {step === 'rooms' && <RoomsStep onDone={(text) => answer('Where do classes happen?', text, 'subjects')} />}
-          {step === 'subjects' && <SubjectsStep onDone={(text) => answer('What is taught, and by whom?', text, 'review')} />}
-          {step === 'review' && <Review onFinish={finish} />}
-        </ScrollView>
-      </View>
+        {step === 'teachers' && <TeachersStep key={step} onNext={forward} onSample={useSample} />}
+        {step === 'classes' && <ClassesStep key={step} onNext={forward} />}
+        {step === 'week' && <WeekStep key={step} onNext={forward} />}
+        {step === 'subjects' && <SubjectsStep key={step} onNext={forward} />}
+        {step === 'rooms' && <RoomsStep key={step} onNext={forward} />}
+        {step === 'review' && <Review key={step} onFinish={finish} onEdit={setStep} />}
+      </KeyboardAvoidingView>
     </View>
   );
 }
 
-function Ask({ question, children }: { question: string; children: ReactNode }) {
+/** A screen's content scrolls; its main button always stays in reach. */
+function Page({ children, footer }: { children: ReactNode; footer: ReactNode }) {
+  const { c } = useTheme();
   return (
     <>
-      <Bubble from="ai">{question}</Bubble>
-      <Card style={{ gap: space.md }}>{children}</Card>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: space.lg, paddingBottom: space.lg }} keyboardShouldPersistTaps="handled">
+        {children}
+      </ScrollView>
+      <View style={{ gap: space.sm, paddingVertical: space.md }}>
+        {footer}
+        <T v="small" color={c.muted} style={{ textAlign: 'center' }}>
+          Everything saves as you go.
+        </T>
+      </View>
     </>
   );
 }
 
-function Describe({ onDone }: { onDone: (summary: string) => void }) {
-  const { profile, update } = useStore();
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const run = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      const result = await api.parse(text, { teachers: profile.teachers.map((t) => t.name), rooms: profile.rooms.map((r) => r.name) });
-      update((p) => mergeDraft(p, result.draft));
-      const d = result.draft;
-      onDone(`Found ${d.teachers.length} teachers, ${d.divisions.length} classes, ${d.rooms.length} rooms and ${d.subjects.length} subjects.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not read that.');
-    } finally {
-      setBusy(false);
-    }
-  };
+function Heading({ title, help }: { title: string; help: string }) {
   return (
-    <Ask question="Tell me about your department, the way you’d explain it to a new colleague.">
-      <Field
-        multiline
-        value={text}
-        onChangeText={setText}
-        placeholder={'e.g. Classes run Monday to Friday, 9 to 4, one-hour periods, break after the 3rd.\nDivisions SE-A and SE-B, 60 students each.\nProf. Mehta teaches DBMS 4 times a week…'}
-        style={{ minHeight: 160, textAlignVertical: 'top' }}
-      />
-      {error ? <T color="#DC2626">{error}</T> : null}
-      <Button label="Read it" icon="sparkles" onPress={run} disabled={!text.trim()} loading={busy} />
-    </Ask>
+    <View style={{ gap: 6 }}>
+      <T v="h1">{title}</T>
+      <T>{help}</T>
+    </View>
   );
 }
 
-function DepartmentStep({ onDone }: { onDone: (text: string) => void }) {
+function WeekStep({ onNext }: { onNext: () => void }) {
   const { profile, update } = useStore();
-  const d = profile.department;
-  const set = (patch: Partial<typeof d>) => update((p) => ({ ...p, department: { ...p.department, ...patch } }));
+  const i = profile.institution;
+  const set = (patch: Partial<InstitutionForm>) => update((p) => ({ ...p, institution: { ...p.institution, ...patch } }));
+  const slots = buildSlots(i.startTime, i.endTime, i.slotDurationMinutes, i.breakAfterSlots, i.breakDurationMinutes);
+  const breakOptions = Array.from({ length: Math.max(0, slots.length - 1) }, (_, n) => n + 1).filter((n) => n >= 2 && n <= 5);
   return (
-    <Ask question="Which department, year and semester is this for?">
-      <Field label="Department" placeholder="e.g. Computer Engineering" value={d.name} onChangeText={(name) => set({ name })} />
-      <Row wrap gap={8}>
-        {['First year', 'Second year', 'Third year', 'Fourth year'].map((y) => (
-          <Chip key={y} label={y} active={d.yearLabel === y} onPress={() => set({ yearLabel: y })} />
-        ))}
-      </Row>
-      <Row wrap gap={8}>
-        {Array.from({ length: 8 }, (_, i) => `Semester ${i + 1}`).map((s) => (
-          <Chip key={s} label={s.replace('Semester', 'Sem')} active={d.semesterLabel === s} onPress={() => set({ semesterLabel: s })} />
-        ))}
-      </Row>
-      <Button label="Next" disabled={!d.name.trim()} onPress={() => onDone([d.name, d.yearLabel, d.semesterLabel].filter(Boolean).join(', '))} />
-    </Ask>
+    <Page footer={<Button label="Looks right" icon="arrow-forward" size="lg" full disabled={!slots.length || !i.workingDays.length} onPress={onNext} />}>
+      <Heading title={`Your week at ${i.name || 'your institution'}`} help="The usual week is filled in. Change anything that’s different." />
+      <Card style={{ gap: space.md }}>
+        <T v="label">Teaching days</T>
+        <Row wrap gap={8}>
+          {DAYS.map((day) => {
+            const on = i.workingDays.includes(day);
+            return <Chip key={day} label={day.slice(0, 3)} active={on} onPress={() => set({ workingDays: on ? i.workingDays.filter((d) => d !== day) : DAYS.filter((d) => d === day || i.workingDays.includes(d)) })} />;
+          })}
+        </Row>
+        <T v="label">Hours</T>
+        <Row wrap gap={8}>
+          {[
+            ['08:00', '14:00'],
+            ['09:00', '16:00'],
+            ['09:00', '17:00'],
+            ['10:00', '17:00'],
+          ].map(([start, end]) => (
+            <Chip key={start + end} label={`${start} – ${end}`} active={i.startTime === start && i.endTime === end} onPress={() => set({ startTime: start, endTime: end })} />
+          ))}
+        </Row>
+        <Row gap={space.lg} wrap>
+          <Stepper label="Starts (hour)" value={Number(i.startTime.slice(0, 2))} min={6} max={13} onChange={(h) => set({ startTime: `${String(h).padStart(2, '0')}:00` })} />
+          <Stepper label="Ends (hour)" value={Number(i.endTime.slice(0, 2))} min={11} max={21} onChange={(h) => set({ endTime: `${String(h).padStart(2, '0')}:00` })} />
+        </Row>
+        <T v="label">One period is</T>
+        <Row wrap gap={8}>
+          {[40, 45, 50, 55, 60].map((m) => (
+            <Chip key={m} label={`${m} min`} active={i.slotDurationMinutes === m} onPress={() => set({ slotDurationMinutes: m })} />
+          ))}
+        </Row>
+        <T v="label">Lunch break</T>
+        <Row wrap gap={8}>
+          <Chip label="None" active={!i.breakAfterSlots} onPress={() => set({ breakAfterSlots: null, breakDurationMinutes: null })} />
+          {breakOptions.map((n) => (
+            <Chip key={n} label={`After period ${n}`} active={i.breakAfterSlots === n} onPress={() => set({ breakAfterSlots: n, breakDurationMinutes: i.breakDurationMinutes || 30 })} />
+          ))}
+        </Row>
+        <T v="small">
+          That’s {slots.length} periods a day, {slots.length * i.workingDays.length} a week.
+        </T>
+      </Card>
+    </Page>
   );
 }
 
-/** Shared list of what has been added in an "add one at a time" step. */
-function Added({ items, onRemove }: { items: { id: string; name: string; detail: string }[]; onRemove: (id: string) => void }) {
+/** A row in an "add one at a time" list. Tapping it edits, when that is on offer. */
+function Added({ items, onRemove, onEdit }: { items: { id: string; name: string; detail: string }[]; onRemove: (id: string) => void; onEdit?: (id: string) => void }) {
   const { c } = useTheme();
   if (!items.length) return null;
   return (
     <View style={{ gap: 6 }}>
       {items.map((item) => (
         <Row key={item.id} style={{ backgroundColor: c.surface2, borderRadius: radius.md, paddingVertical: 8, paddingHorizontal: 12, justifyContent: 'space-between' }}>
-          <View style={{ flex: 1 }}>
+          <Pressable style={{ flex: 1 }} disabled={!onEdit} accessibilityLabel={onEdit ? `Edit ${item.name}` : undefined} onPress={() => onEdit?.(item.id)}>
             <T v="h3">{item.name}</T>
             <T v="small">{item.detail}</T>
-          </View>
+          </Pressable>
           <Pressable accessibilityLabel={`Remove ${item.name}`} onPress={() => onRemove(item.id)} hitSlop={10}>
             <Icon name="close-circle" size={22} color={c.muted} />
           </Pressable>
@@ -427,7 +277,109 @@ function Added({ items, onRemove }: { items: { id: string; name: string; detail:
   );
 }
 
-function ClassesStep({ onDone }: { onDone: (text: string) => void }) {
+const counted = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : one.endsWith('s') ? 'es' : 's'} added`;
+
+function TeachersStep({ onNext, onSample }: { onNext: () => void; onSample: () => void }) {
+  const { profile, update } = useStore();
+  const { c } = useTheme();
+  const [pasting, setPasting] = useState(false);
+  const [pasted, setPasted] = useState('');
+  const [name, setName] = useState('');
+  const [subjects, setSubjects] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
+  const nameInput = useRef<TextInput>(null);
+  const typed = parseSubjectList(subjects);
+  const known = teachableSubjects(profile).filter((item) => !typed.some((other) => other.toLowerCase() === item.toLowerCase()));
+
+  const save = () => {
+    const clean = name.trim();
+    if (!clean) return;
+    if (editing) update((p) => ({ ...p, teachers: p.teachers.map((t) => (t.id === editing ? { ...t, name: clean, expertise: typed } : t)) }));
+    else update((p) => applyActions(p, [{ type: 'addTeacher', name: clean, ...(typed.length ? { expertise: typed } : {}) }]) as Profile);
+    setName('');
+    setSubjects('');
+    setEditing(null);
+    nameInput.current?.focus();
+  };
+  const addPasted = () => {
+    const actions = parseTeacherLines(pasted).map((person) => ({ type: 'addTeacher' as const, name: person.name, ...(person.canTeach.length ? { expertise: person.canTeach } : {}) }));
+    if (actions.length) update((p) => applyActions(p, actions) as Profile);
+    setPasted('');
+    setPasting(false);
+  };
+  const edit = (id: string) => {
+    const teacher = profile.teachers.find((t) => t.id === id);
+    if (!teacher) return;
+    setEditing(id);
+    setName(teacher.name);
+    setSubjects((teacher.expertise ?? []).join(', '));
+    setPasting(false);
+  };
+  const missing = profile.teachers.filter((t) => !t.expertise?.length).length;
+  const ready = profile.teachers.some((t) => t.expertise?.length);
+
+  return (
+    <Page
+      footer={
+        <>
+          <Button label="Continue" icon="arrow-forward" size="lg" full disabled={!ready} onPress={onNext} />
+          {!profile.teachers.length ? <Button label="Use sample data instead" kind="ghost" onPress={onSample} /> : null}
+        </>
+      }
+    >
+      <Heading title={`Who teaches at ${profile.institution.name || 'your institution'}?`} help="Add each teacher and what they can teach. Subjects are worked out from this, so you only type them once." />
+      {pasting ? (
+        <Card style={{ gap: space.md }}>
+          <Field
+            label="One teacher a line"
+            multiline
+            value={pasted}
+            onChangeText={setPasted}
+            placeholder={'Prof. Mehta: DBMS, Operating Systems\nDr. Rao: Maths\nProf. Iyer: Networks, Networks Lab'}
+            style={{ minHeight: 140, textAlignVertical: 'top' }}
+          />
+          <Row gap={8}>
+            <Button label="Add them all" icon="people-outline" disabled={!pasted.trim()} onPress={addPasted} />
+            <Button label="Cancel" kind="ghost" onPress={() => setPasting(false)} />
+          </Row>
+        </Card>
+      ) : (
+        <Card style={{ gap: space.md }}>
+          <Field ref={nameInput} label="Teacher’s name" placeholder="e.g. Prof. Anita Mehta" value={name} onChangeText={setName} autoFocus returnKeyType="next" />
+          <Field label="Can teach" placeholder="e.g. DBMS, Operating Systems, DBMS Lab" value={subjects} onChangeText={setSubjects} onSubmitEditing={save} returnKeyType="done" hint="Separate subjects with commas. Add “Lab” for practicals." />
+          {known.length ? (
+            <Row wrap gap={8}>
+              {known.slice(0, 12).map((item) => (
+                <Chip key={item} label={`+ ${item}`} onPress={() => setSubjects([...typed, item].join(', '))} />
+              ))}
+            </Row>
+          ) : null}
+          <Row gap={8} wrap>
+            <Button label={editing ? 'Save changes' : 'Add teacher'} icon={editing ? 'checkmark' : 'person-add-outline'} onPress={save} disabled={!name.trim()} />
+            {editing ? <Button label="Cancel" kind="ghost" onPress={() => { setEditing(null); setName(''); setSubjects(''); }} /> : <Button label="Paste a list instead" kind="ghost" onPress={() => setPasting(true)} />}
+          </Row>
+        </Card>
+      )}
+      {profile.teachers.length ? (
+        <View style={{ gap: space.sm }}>
+          <T v="label">{counted(profile.teachers.length, 'teacher')}. Tap one to change it.</T>
+          <Added
+            items={profile.teachers.map((t) => ({ id: t.id, name: t.name, detail: t.expertise?.join(', ') || 'Nothing to teach yet' }))}
+            onEdit={edit}
+            onRemove={(id) => update((p) => ({ ...p, teachers: p.teachers.filter((t) => t.id !== id) }))}
+          />
+        </View>
+      ) : null}
+      {missing ? (
+        <T v="small" color={c.warn}>
+          {missing} teacher{missing === 1 ? ' has' : 's have'} no subjects yet. They’ll be kept free for substitutions.
+        </T>
+      ) : null}
+    </Page>
+  );
+}
+
+function ClassesStep({ onNext }: { onNext: () => void }) {
   const { profile, update } = useStore();
   const [name, setName] = useState('');
   const [size, setSize] = useState(60);
@@ -437,169 +389,169 @@ function ClassesStep({ onDone }: { onDone: (text: string) => void }) {
   const add = (value = name) => {
     const clean = value.trim();
     if (!clean || profile.divisions.some((d) => d.name.toLowerCase() === clean.toLowerCase())) return;
-    update((p) =>
-      applyActions(p, [{ type: 'addClass', name: clean, size, batches: Number(batches) ? batchNames(clean, Number(batches)) : [] }]) as Profile,
-    );
+    update((p) => applyActions(p, [{ type: 'addClass', name: clean, size, batches: Number(batches) ? batchNames(clean, Number(batches)) : [] }]) as Profile);
     setName('');
   };
   return (
-    <Ask question="Add your classes one at a time. Each gets its own timetable.">
-      <Field label="Class name" placeholder={suggestion ?? 'e.g. SE-A'} value={name} onChangeText={setName} onSubmitEditing={() => add()} returnKeyType="done" />
-      <Row gap={space.lg} wrap align="flex-end">
-        <Stepper label="Students" value={size} min={1} max={400} step={5} onChange={setSize} />
-        <View style={{ gap: 6, minWidth: 200 }}>
-          <T v="label">Lab batches</T>
-          <Segmented options={[{ value: '0', label: 'None' }, { value: '2', label: '2' }, { value: '3', label: '3' }]} value={batches} onChange={setBatches} />
+    <Page footer={<Button label="Continue" icon="arrow-forward" size="lg" full disabled={!profile.divisions.length} onPress={onNext} />}>
+      <Heading title="Which classes need a timetable?" help="Each class gets its own. Batches are how a class splits up for labs." />
+      <Card style={{ gap: space.md }}>
+        <Field label="Class name" placeholder={suggestion ?? 'e.g. SE-A'} value={name} onChangeText={setName} onSubmitEditing={() => add()} returnKeyType="done" />
+        <Row gap={space.lg} wrap align="flex-end">
+          <Stepper label="Students" value={size} min={1} max={400} step={5} onChange={setSize} />
+          <View style={{ gap: 6, minWidth: 200 }}>
+            <T v="label">Lab batches</T>
+            <Segmented options={[{ value: '0', label: 'None' }, { value: '2', label: '2' }, { value: '3', label: '3' }]} value={batches} onChange={setBatches} />
+          </View>
+        </Row>
+        <Row gap={8} wrap>
+          <Button label="Add class" icon="add" onPress={() => add()} disabled={!name.trim()} />
+          {suggestion && !name ? <Chip label={`+ ${suggestion}`} onPress={() => add(suggestion)} /> : null}
+        </Row>
+      </Card>
+      {profile.divisions.length ? (
+        <View style={{ gap: space.sm }}>
+          <T v="label">{counted(profile.divisions.length, 'class')}</T>
+          <Added
+            items={profile.divisions.map((d) => ({ id: d.id, name: d.name, detail: `${d.size ?? '?'} students${d.batches.length ? ` · batches ${d.batches.join(', ')}` : ''}` }))}
+            onRemove={(id) => update((p) => ({ ...p, divisions: p.divisions.filter((d) => d.id !== id) }))}
+          />
         </View>
-      </Row>
-      <Row gap={8} wrap>
-        <Button label="Add class" icon="add" onPress={() => add()} disabled={!name.trim()} />
-        {suggestion && !name ? <Chip label={`+ ${suggestion}`} onPress={() => add(suggestion)} /> : null}
-      </Row>
-      <Added
-        items={profile.divisions.map((d) => ({ id: d.id, name: d.name, detail: `${d.size ?? '?'} students${d.batches.length ? ` · batches ${d.batches.join(', ')}` : ''}` }))}
-        onRemove={(id) => update((p) => ({ ...p, divisions: p.divisions.filter((d) => d.id !== id) }))}
-      />
-      <Button label="Done with classes" kind="secondary" disabled={!profile.divisions.length} onPress={() => onDone(profile.divisions.map((d) => d.name).join(', '))} />
-    </Ask>
+      ) : null}
+    </Page>
   );
 }
 
-function TeachersStep({ onDone }: { onDone: (text: string) => void }) {
+function SubjectsStep({ onNext }: { onNext: () => void }) {
   const { profile, update } = useStore();
-  const [name, setName] = useState('');
-  const [expertise, setExpertise] = useState('');
-  const add = () => {
-    if (!name.trim()) return;
-    const tags = expertise.split(',').map((s) => s.trim()).filter(Boolean);
-    update((p) => applyActions(p, [{ type: 'addTeacher', name: name.trim(), ...(tags.length ? { expertise: tags } : {}) }]) as Profile);
-    setName('');
-    setExpertise('');
-  };
+  const { c } = useTheme();
+  const estimate = setupEstimate(profile);
+  const change = (id: string, patch: Partial<Profile['subjects'][number]>) => update((p) => ({ ...p, subjects: p.subjects.map((s) => (s.id === id ? { ...s, ...patch } : s)) }));
   return (
-    <Ask question="Who teaches? Add each teacher with what they’re good at, so I can suggest them for the right subjects.">
-      <Field label="Name" placeholder="e.g. Prof. Anita Mehta" value={name} onChangeText={setName} onSubmitEditing={add} />
-      <Field label="Expertise (optional)" placeholder="e.g. Databases, Operating Systems" value={expertise} onChangeText={setExpertise} onSubmitEditing={add} />
-      <Button label="Add teacher" icon="person-add-outline" onPress={add} disabled={!name.trim()} />
-      <Added
-        items={profile.teachers.map((t) => ({ id: t.id, name: t.name, detail: t.expertise?.join(', ') || 'No expertise yet' }))}
-        onRemove={(id) => update((p) => ({ ...p, teachers: p.teachers.filter((t) => t.id !== id) }))}
-      />
-      <Button label="Done with teachers" kind="secondary" disabled={!profile.teachers.length} onPress={() => onDone(`${profile.teachers.length} teacher${profile.teachers.length === 1 ? '' : 's'}`)} />
-    </Ask>
+    <Page footer={<Button label="Continue" icon="arrow-forward" size="lg" full disabled={!profile.subjects.length} onPress={onNext} />}>
+      <Heading title="How often is each subject taught?" help="These came from what your teachers can teach. Check who takes each one and how many times a week." />
+      {profile.subjects.map((subject) => {
+        const able = teachersFor(subject.name, profile);
+        const options = able.length ? able : profile.teachers;
+        const line = estimate.teachers.find((t) => t.id === subject.teacherId);
+        const chosen = subject.divisionIds?.length ? subject.divisionIds : profile.divisions.map((d) => d.id);
+        return (
+          <Card key={subject.id} style={{ gap: space.md }}>
+            <Row style={{ justifyContent: 'space-between' }}>
+              <T v="h3" style={{ flex: 1 }}>
+                {subject.name}
+              </T>
+              <Pressable accessibilityLabel={`Remove ${subject.name}`} hitSlop={10} onPress={() => update((p) => ({ ...p, subjects: p.subjects.filter((s) => s.id !== subject.id) }))}>
+                <Icon name="close-circle" size={22} color={c.muted} />
+              </Pressable>
+            </Row>
+            <Row gap={space.lg} wrap align="flex-end">
+              <View style={{ gap: 6, minWidth: 180 }}>
+                <T v="label">Kind</T>
+                <Segmented
+                  options={[{ value: 'lecture', label: 'Lecture' }, { value: 'lab', label: 'Lab' }]}
+                  value={subject.isLab ? 'lab' : 'lecture'}
+                  onChange={(value) => change(subject.id, value === 'lab' ? { isLab: true, durationSlots: 2, sessionsPerWeek: 1 } : { isLab: false, durationSlots: 1, sessionsPerWeek: 3 })}
+                />
+              </View>
+              <Stepper label="Times a week" value={subject.sessionsPerWeek} min={1} max={10} onChange={(sessionsPerWeek) => change(subject.id, { sessionsPerWeek })} />
+            </Row>
+            <T v="label">Taught by</T>
+            <Row wrap gap={8}>
+              {options.map((t) => (
+                <Chip key={t.id} label={t.name} active={subject.teacherId === t.id} onPress={() => change(subject.id, { teacherId: t.id })} />
+              ))}
+            </Row>
+            {line ? (
+              <T v="small" color={line.fits ? c.muted : c.danger}>
+                {line.name} would teach {line.load} of {line.capacity} periods a week{line.fits ? '.' : '. That’s too many.'}
+              </T>
+            ) : null}
+            {profile.divisions.length > 1 ? (
+              <>
+                <T v="label">For</T>
+                <Row wrap gap={8}>
+                  {profile.divisions.map((d) => {
+                    const on = chosen.includes(d.id);
+                    return (
+                      <Chip
+                        key={d.id}
+                        label={d.name}
+                        active={on}
+                        onPress={() => {
+                          const next = on ? chosen.filter((id) => id !== d.id) : [...chosen, d.id];
+                          if (next.length) change(subject.id, { divisionIds: next.length === profile.divisions.length ? [] : next });
+                        }}
+                      />
+                    );
+                  })}
+                </Row>
+              </>
+            ) : null}
+          </Card>
+        );
+      })}
+    </Page>
   );
 }
 
-function RoomsStep({ onDone }: { onDone: (text: string) => void }) {
+function RoomsStep({ onNext }: { onNext: () => void }) {
   const { profile, update } = useStore();
   const [name, setName] = useState('');
   const [type, setType] = useState<RoomForm['type']>('classroom');
   const [seats, setSeats] = useState(60);
-  const last = profile.rooms[profile.rooms.length - 1];
-  const suggestion = last ? nextName(last.name) : null;
-  const add = (value = name) => {
-    const clean = value.trim();
+  const add = () => {
+    const clean = name.trim();
     if (!clean || profile.rooms.some((r) => r.name.toLowerCase() === clean.toLowerCase())) return;
     update((p) => applyActions(p, [{ type: 'addRoom', name: clean, roomType: type, capacity: seats }]) as Profile);
     setName('');
   };
   return (
-    <Ask question="Where do classes happen? Add classrooms and labs; I’ll pick one that fits each class.">
-      <Segmented
-        options={[
-          { value: 'classroom', label: 'Classroom' },
-          { value: 'lab', label: 'Lab' },
-          { value: 'seminar-hall', label: 'Hall' },
-        ]}
-        value={type}
-        onChange={(value) => {
-          setType(value);
-          setSeats(value === 'lab' ? 30 : value === 'seminar-hall' ? 120 : 60);
-        }}
-      />
-      <Field label="Name" placeholder={suggestion ?? 'e.g. Room 101'} value={name} onChangeText={setName} onSubmitEditing={() => add()} />
-      <Stepper label="Seats" value={seats} min={1} max={500} step={5} onChange={setSeats} />
-      <Row gap={8} wrap>
-        <Button label="Add room" icon="add" onPress={() => add()} disabled={!name.trim()} />
-        {suggestion && !name ? <Chip label={`+ ${suggestion}`} onPress={() => add(suggestion)} /> : null}
-      </Row>
+    <Page footer={<Button label="Continue" icon="arrow-forward" size="lg" full disabled={!profile.rooms.length} onPress={onNext} />}>
+      <Heading title="Are these your rooms?" help="We suggested enough for your classes and labs. Rename them later if you like, or add your own." />
       <Added
-        items={profile.rooms.map((r) => ({ id: r.id, name: r.name, detail: `${r.type === 'seminar-hall' ? 'hall' : r.type} · ${r.capacity} seats` }))}
+        items={profile.rooms.map((r) => ({ id: r.id, name: r.name, detail: `${r.type === 'seminar-hall' ? 'Hall' : r.type === 'lab' ? 'Lab' : 'Classroom'} · ${r.capacity} seats` }))}
         onRemove={(id) => update((p) => ({ ...p, rooms: p.rooms.filter((r) => r.id !== id) }))}
       />
-      <Button label="Done with rooms" kind="secondary" disabled={!profile.rooms.length} onPress={() => onDone(`${profile.rooms.length} room${profile.rooms.length === 1 ? '' : 's'}`)} />
-    </Ask>
+      <Card style={{ gap: space.md }}>
+        <Segmented
+          options={[{ value: 'classroom', label: 'Classroom' }, { value: 'lab', label: 'Lab' }, { value: 'seminar-hall', label: 'Hall' }]}
+          value={type}
+          onChange={(value) => {
+            setType(value);
+            setSeats(value === 'lab' ? 30 : value === 'seminar-hall' ? 120 : 60);
+          }}
+        />
+        <Field label="Room name" placeholder="e.g. Room 201" value={name} onChangeText={setName} onSubmitEditing={add} />
+        <Stepper label="Seats" value={seats} min={1} max={500} step={5} onChange={setSeats} />
+        <Button label="Add room" kind="secondary" icon="add" onPress={add} disabled={!name.trim()} />
+      </Card>
+    </Page>
   );
 }
 
-function SubjectsStep({ onDone }: { onDone: (text: string) => void }) {
-  const { profile, update } = useStore();
+function LoadBar({ line }: { line: LoadLine }) {
   const { c } = useTheme();
-  const [name, setName] = useState('');
-  const [isLab, setIsLab] = useState(false);
-  const [perWeek, setPerWeek] = useState(3);
-  const [teacherId, setTeacherId] = useState('');
-  const ordered = [...profile.teachers].sort((a, b) => Number(hasExpertise(b, name)) - Number(hasExpertise(a, name)));
-  const add = () => {
-    if (!name.trim() || !teacherId) return;
-    update((p) => ({
-      ...p,
-      subjects: [
-        ...p.subjects,
-        { id: createId(), name: name.trim(), isLab, sessionsPerWeek: perWeek, durationSlots: isLab ? 2 : 1, teacherId, roomId: '', divisionIds: [], teacherOverrides: {} },
-      ],
-    }));
-    setName('');
-    setTeacherId('');
-  };
   return (
-    <Ask question="Last one: what is taught, and by whom? Teachers with matching expertise are starred.">
-      <Field label="Subject" placeholder="e.g. Operating Systems" value={name} onChangeText={setName} />
-      <Row gap={space.lg} wrap align="flex-end">
-        <View style={{ gap: 6, minWidth: 200 }}>
-          <T v="label">Kind</T>
-          <Segmented
-            options={[
-              { value: 'lecture', label: 'Lecture' },
-              { value: 'lab', label: 'Lab' },
-            ]}
-            value={isLab ? 'lab' : 'lecture'}
-            onChange={(value) => {
-              setIsLab(value === 'lab');
-              setPerWeek(value === 'lab' ? 1 : 3);
-            }}
-          />
-        </View>
-        <Stepper label="Times a week" value={perWeek} min={1} max={10} onChange={setPerWeek} />
+    <View style={{ gap: 4 }}>
+      <Row style={{ justifyContent: 'space-between' }} gap={8}>
+        <T style={{ flex: 1 }}>{line.name}</T>
+        <T v="small" color={line.fits ? c.muted : c.danger}>
+          {line.load} of {line.capacity} periods a week
+        </T>
       </Row>
-      <T v="label">Taught by</T>
-      <Row wrap gap={8}>
-        {ordered.map((t) => (
-          <Chip key={t.id} label={t.name} icon={name && hasExpertise(t, name) ? 'star' : undefined} active={teacherId === t.id} onPress={() => setTeacherId(t.id)} />
-        ))}
-      </Row>
-      <Button label="Add subject" icon="add" onPress={add} disabled={!name.trim() || !teacherId} />
-      <Added
-        items={profile.subjects.map((s) => ({
-          id: s.id,
-          name: s.name,
-          detail: `${s.isLab ? 'Lab' : 'Lecture'} · ${s.sessionsPerWeek}× a week · ${profile.teachers.find((t) => t.id === s.teacherId)?.name ?? 'no teacher'}`,
-        }))}
-        onRemove={(id) => update((p) => ({ ...p, subjects: p.subjects.filter((s) => s.id !== id) }))}
-      />
-      <T v="small" color={c.muted}>
-        Every subject is taught to all classes. You can change that later.
-      </T>
-      <Button label="Done with subjects" kind="secondary" disabled={!profile.subjects.length} onPress={() => onDone(`${profile.subjects.length} subjects`)} />
-    </Ask>
+      <Progress value={line.capacity ? Math.min(1, line.load / line.capacity) : 1} />
+    </View>
   );
 }
 
-function Review({ onFinish }: { onFinish: (to: '/home' | '/timetable') => void }) {
+function Review({ onFinish, onEdit }: { onFinish: (to: '/home' | '/timetable') => void; onEdit: (step: Step) => void }) {
   const store = useStore();
+  const { profile } = store;
   const { c } = useTheme();
-  const insights = setupInsights(store.profile);
+  const insights = setupInsights(profile);
   const blockers = insights.filter((i) => i.level === 'blocker');
+  const estimate = setupEstimate(profile);
   const [result, setResult] = useState('');
   const [error, setError] = useState('');
   const build = async () => {
@@ -610,37 +562,67 @@ function Review({ onFinish }: { onFinish: (to: '/home' | '/timetable') => void }
       setError(e instanceof Error ? e.message : 'Could not build the timetable.');
     }
   };
+  const areaStep: Partial<Record<string, Step>> = { basics: 'week', teachers: 'teachers', classes: 'classes', rooms: 'rooms', subjects: 'subjects' };
+
+  if (result) {
+    return (
+      <Page footer={<Button label="See my timetable" icon="arrow-forward" size="lg" full onPress={() => onFinish('/timetable')} />}>
+        <Heading title="Your timetables are ready" help={`${result} Pick the one you like best, and TimeFlex learns from your choice.`} />
+      </Page>
+    );
+  }
   return (
-    <>
-      <Bubble from="ai">
-        {blockers.length
-          ? `Nearly there. I found ${blockers.length} thing${blockers.length === 1 ? '' : 's'} to sort out first. Tap a fix and I’ll do it.`
-          : 'Everything looks good. Shall I build three different versions so you can pick your favourite?'}
-      </Bubble>
+    <Page
+      footer={
+        <>
+          {error ? <T color={c.danger}>{error}</T> : null}
+          <Button label={store.busy ?? 'Build 3 versions'} icon="sparkles" size="lg" full onPress={build} disabled={blockers.length > 0} loading={!!store.busy} />
+          <T v="small" style={{ textAlign: 'center' }}>
+            Usually takes under {Math.ceil(estimate.buildSeconds(3) / 10) * 10} seconds.
+          </T>
+          <Button label="I’ll look around first" kind="ghost" onPress={() => onFinish('/home')} />
+        </>
+      }
+    >
+      <Heading
+        title={blockers.length ? 'Nearly there' : estimate.fits ? 'Everything fits' : 'This looks too full'}
+        help={
+          blockers.length
+            ? `${blockers.length} thing${blockers.length === 1 ? '' : 's'} to sort out first. Most take one tap.`
+            : !estimate.fits
+              ? 'The numbers in red won’t fit, so some classes would be left out. Add rooms or reduce periods first.'
+              : `${plural(profile.teachers.length, 'teacher')}, ${plural(profile.divisions.length, 'class', 'classes')}, ${plural(profile.subjects.length, 'subject')} and ${plural(profile.rooms.length, 'room')}.`
+        }
+      />
       {insights
-        .filter((i) => i.level !== 'good')
+        .filter((i) => i.level === 'blocker' || i.level === 'warning')
         .slice(0, 6)
         .map((insight) => (
           <Card key={insight.id} tone={insight.level === 'blocker' ? 'warn' : undefined} style={{ gap: 6 }}>
             <T v="h3">{insight.title}</T>
             <T v="small">{insight.detail}</T>
-            {insight.fix && insight.fix.actions.every((a) => a.type !== 'generate' && a.type !== 'generateVariants') ? (
-              <Button label={insight.fix.label} size="sm" kind="secondary" icon="flash-outline" onPress={() => store.applyAgent(insight.fix!.actions)} style={{ alignSelf: 'flex-start' }} />
-            ) : null}
+            <Row gap={8} wrap>
+              {insight.fix && insight.fix.actions.every((a) => a.type !== 'generate' && a.type !== 'generateVariants') ? (
+                <Button label={insight.fix.label} size="sm" kind="secondary" icon="flash-outline" onPress={() => store.applyAgent(insight.fix!.actions)} />
+              ) : null}
+              {areaStep[insight.area] ? <Button label="Change it" size="sm" kind="ghost" onPress={() => onEdit(areaStep[insight.area]!)} /> : null}
+            </Row>
           </Card>
         ))}
-      {result ? (
-        <>
-          <Bubble from="ai">{`${result} Have a look, pick the one you like best, and I’ll learn from it.`}</Bubble>
-          <Button label="See my timetable" icon="arrow-forward" size="lg" onPress={() => onFinish('/timetable')} />
-        </>
-      ) : (
-        <Card style={{ gap: space.md }}>
-          {error ? <T color={c.danger}>{error}</T> : null}
-          <Button label={store.busy ?? 'Build 3 versions'} icon="sparkles" size="lg" onPress={build} disabled={blockers.length > 0} loading={!!store.busy} />
-          <Button label="I’ll look around first" kind="ghost" onPress={() => onFinish('/home')} />
-        </Card>
-      )}
-    </>
+      <Card style={{ gap: space.md }}>
+        <T v="label">How full each class’s week will be</T>
+        {estimate.classes.map((line) => (
+          <LoadBar key={line.id} line={line} />
+        ))}
+        <T v="label">How busy each teacher will be</T>
+        {estimate.teachers.map((line) => (
+          <LoadBar key={line.id} line={line} />
+        ))}
+        <T v="label">How much of your rooms it needs</T>
+        {estimate.rooms.map((line) => (
+          <LoadBar key={line.id} line={line} />
+        ))}
+      </Card>
+    </Page>
   );
 }

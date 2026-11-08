@@ -10,12 +10,14 @@ There are two front ends:
 
 ## Quick start
 
-Needs Node 20+ and Python 3.11+. Ollama is optional.
+To run everything in containers, and to build the Android app, see [DOCKER.md](DOCKER.md).
+
+For development, you need Node 20+ and Python 3.11+. Ollama is optional.
 
 ```bash
 npm install
 npm run setup            # solver virtualenv, app dependencies, checks for Ollama
-ollama pull qwen3:0.6b   # optional, ~520 MB; lets the assistant understand free-form requests
+ollama pull qwen2.5:0.5b   # optional, ~400 MB; lets the assistant understand free-form requests
 npm run dev              # solver :8000, API :3001 (and the older web app on :5173)
 npm run app              # the app in the browser (Expo, http://localhost:8081)
 ```
@@ -174,7 +176,7 @@ scored 80%, so expect occasional misses on unfamiliar phrasing. That is why ever
 |---|---|---|
 | `AI_PROVIDER` | `ollama` | `ollama`, `openai` (LM Studio, llama.cpp `llama-server`, vLLM) or `off` |
 | `AI_BASE_URL` | `http://127.0.0.1:11434` | `http://127.0.0.1:1234/v1` is the default for `openai` |
-| `AI_MODEL` | `qwen3:0.6b` | e.g. `qwen3:1.7b` for messier notes |
+| `AI_MODEL` | `qwen2.5:0.5b` | e.g. `qwen2.5:1.5b` for messier notes |
 | `AI_TIMEOUT_MS` | `120000` | first call also loads the model |
 | `DATABASE_URL` | unset | PostgreSQL connection string; unset uses the JSON file store |
 | `SOLVER_URL` | `http://127.0.0.1:8000/solve` | |

@@ -3,11 +3,11 @@ import { useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  actionsFromIntent,
   describeAction,
   isRunAction,
   parseCommand,
   setupInsights,
+  understandModelReply,
   timetableInsights,
   type AgentAction,
 } from '@core';
@@ -70,8 +70,8 @@ export default function Assistant() {
           classes: profile.divisions.map((d) => d.name),
         });
         if (reply.source === 'llm') {
-          const fromModel = actionsFromIntent(reply.intent, profile);
-          if (fromModel.understood || reply.intent.intent !== 'unknown') result = fromModel;
+          const fromModel = understandModelReply(reply.intent, clean, profile);
+          if (fromModel.understood) result = fromModel;
         }
       } catch {
         // Offline: the rule-based reply below still helps.

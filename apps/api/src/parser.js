@@ -700,10 +700,11 @@ export const parseRequirements = async (text, context = {}) => {
     const { draft, warnings } = normalizeDraft(groundRaw(mergeAssignments(raw, input), input), input, context);
     return { draft, warnings, source: 'llm', elapsedMs: Date.now() - started };
   } catch (error) {
+    console.warn('AI parse failed:', error.message);
     const { draft, warnings } = normalizeDraft(groundRaw(mergeAssignments(ruleParse(input), input), input), input, context);
     return {
       draft,
-      warnings: [`Local model unavailable (${error.message}). Used the basic rule parser instead.`, ...warnings],
+      warnings: ['The AI model is not available, so the basic rule parser was used instead.', ...warnings],
       source: 'rules',
       elapsedMs: Date.now() - started,
     };

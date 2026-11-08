@@ -16,6 +16,22 @@ export default function More() {
   const [deleting, setDeleting] = useState(false);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [changing, setChanging] = useState(false);
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [passwordNote, setPasswordNote] = useState('');
+  const changePassword = async () => {
+    setPasswordNote('');
+    try {
+      await api.changePassword(current, next);
+      setCurrent('');
+      setNext('');
+      setChanging(false);
+      setPasswordNote('Password changed. Other devices have been signed out.');
+    } catch (e) {
+      setPasswordNote(e instanceof Error ? e.message : 'Could not change the password.');
+    }
+  };
 
   useEffect(() => {
     api
@@ -112,6 +128,19 @@ export default function More() {
 
       <SectionTitle title="Account" />
       <View style={{ gap: space.sm }}>
+        {!changing ? (
+          <Button label="Change password" kind="secondary" icon="key-outline" onPress={() => setChanging(true)} />
+        ) : (
+          <Card style={{ gap: space.md }}>
+            <Field label="Current password" secureTextEntry value={current} onChangeText={setCurrent} autoComplete="current-password" />
+            <Field label="New password" secureTextEntry value={next} onChangeText={setNext} autoComplete="new-password" hint="At least 8 characters" />
+            <Row gap={8}>
+              <Button label="Save" size="sm" disabled={!current || next.length < 8} onPress={changePassword} />
+              <Button label="Cancel" kind="ghost" size="sm" onPress={() => setChanging(false)} />
+            </Row>
+          </Card>
+        )}
+        {passwordNote ? <T v="small">{passwordNote}</T> : null}
         <Button label="Sign out" kind="secondary" icon="log-out-outline" onPress={() => store.signOut().then(() => router.replace('/welcome'))} />
         {!deleting ? (
           <Button label="Delete account…" kind="ghost" onPress={() => setDeleting(true)} />

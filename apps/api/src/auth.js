@@ -10,6 +10,10 @@ const SCRYPT = { N: 16384, r: 8, p: 1 };
 const KEY_LENGTH = 64;
 export const SESSION_DAYS = 30;
 export const MIN_PASSWORD = 8;
+export const MAX_PASSWORD = 200;
+
+/** Accounts on this domain are throwaway demos, removed after a day. */
+export const DEMO_DOMAIN = '@demo.timeflex.app';
 
 const scrypt = (password, salt) =>
   new Promise((resolve, reject) =>
@@ -50,9 +54,49 @@ export const bearerToken = (request) => {
 export const createRateLimiter = ({ limit = 10, windowMs = 15 * 60 * 1000 } = {}) => {
   const attempts = new Map();
   const recent = (key) => (attempts.get(key) ?? []).filter((time) => Date.now() - time < windowMs);
+  // An attacker can invent endless keys, so old ones must not pile up in memory.
+  const sweep = () => {
+    if (attempts.size < 10000) return;
+    for (const key of attempts.keys()) if (!recent(key).length) attempts.delete(key);
+    if (attempts.size >= 10000) attempts.clear();
+  };
+  const fail = (key) => {
+    sweep();
+    attempts.set(key, [...recent(key), Date.now()]);
+  };
   return {
     blocked: (key) => recent(key).length >= limit,
-    fail: (key) => attempts.set(key, [...recent(key), Date.now()]),
+    fail,
     reset: (key) => attempts.delete(key),
+    /** Counts one use; false once the limit is reached. */
+    take: (key) => {
+      if (recent(key).length >= limit) return false;
+      fail(key);
+      return true;
+    },
+  };
+};
+
+/** Runs at most `active` jobs at once, with a short queue. Beyond that it refuses. */
+export const createJobSlots = ({ active = 3, waiting = 30 } = {}) => {
+  let running = 0;
+  const queue = [];
+  const release = () => {
+    running -= 1;
+    queue.shift()?.();
+  };
+  return {
+    async run(job) {
+      if (running >= active) {
+        if (queue.length >= waiting) throw Object.assign(new Error('busy'), { busy: true });
+        await new Promise((resolve) => queue.push(resolve));
+      }
+      running += 1;
+      try {
+        return await job();
+      } finally {
+        release();
+      }
+    },
   };
 };

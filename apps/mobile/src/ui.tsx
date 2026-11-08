@@ -3,6 +3,7 @@ import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useRef, type ComponentProps, type ReactNode } from 'react';
+import type { Ref } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -317,7 +318,7 @@ export function Pill({ label, tone = 'neutral' }: { label: string; tone?: 'neutr
   );
 }
 
-export function Field({ label, hint, style, ...props }: TextInputProps & { label?: string; hint?: string }) {
+export function Field({ label, hint, style, ...props }: TextInputProps & { label?: string; hint?: string; ref?: Ref<TextInput> }) {
   const { c } = useTheme();
   return (
     <View style={{ gap: 6 }}>

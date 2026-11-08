@@ -1,0 +1,140 @@
+# TimeFlex: run ./deploy.sh, then open http://localhost:8080
+# Browsers and the phone app both talk to the web container only. Everything else is private.
+name: timeflex
+
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 512
+
+services:
+  web:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    mem_limit: 256m
+    ports:
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  api:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 1g
+    environment:
+      PORT: "3001"
+      DATABASE_URL: postgres://timeflex:${POSTGRES_PASSWORD:?Run ./deploy.sh or set POSTGRES_PASSWORD in .env}@db:5432/timeflex
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      ALLOW_DEMO: ${ALLOW_DEMO:-true}
+      SOLVER_URL: http://solver:8000/solve
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
+      AI_BASE_URL: http://ollama:11434
+      AI_MODEL: ${AI_MODEL:-${OLLAMA_MODEL:-qwen2.5:0.5b}}
+      AI_TIMEOUT_MS: "45000"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      solver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  solver:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: docker/solver.Dockerfile
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 4g
+    # Lower priority than the API, so a big solve never makes the app feel stuck.
+    cpu_shares: 512
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: timeflex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run ./deploy.sh or set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: timeflex
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timeflex -d timeflex"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:0.12.3
+    restart: unless-stopped
+    mem_limit: 2g
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # Runs once to download the model, then exits. The app does not wait for it: until the
+  # model is ready, the built-in rules answer on their own.
+  ollama-pull:
+    image: ollama/ollama:0.12.3
+    restart: on-failure:5
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "${OLLAMA_MODEL:-qwen2.5:0.5b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # Optional automatic HTTPS for hosting: docker compose --profile https up -d
+  https:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    command: ["caddy", "reverse-proxy", "--from", "${DOMAIN:-localhost}", "--to", "web:8080"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy:/data
+    depends_on:
+      - web
+
+volumes:
+  db:
+  ollama:
+  caddy:

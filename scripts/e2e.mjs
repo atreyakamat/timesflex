@@ -32,6 +32,7 @@ if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const email = `e2e-${Date.now()}@example.test`;
+const firstEmail = `e2e-first-${Date.now()}@example.test`;
 const password = `e2e-${Math.random().toString(36).slice(2)}-pass`;
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -148,20 +149,74 @@ try {
   check('landing page renders', true);
   await shot('01-landing');
 
-  await click('Create your account');
-  await waitFor(`__has('Let’s set up your department')`);
-  await type('e.g. Goa College of Engineering', 'E2E Test College');
-  await type('e.g. Prof. Anita Mehta', 'Prof. Test Coordinator');
-  await type('you@college.edu', email);
-  await type('At least 8 characters', password);
-  await sleep(200);
-  await click('Create account');
-  await waitFor(`__has('How would you like to begin?')`, 15000);
-  check('sign-up opens the conversational onboarding', true);
-  token = await evaluate(`localStorage.getItem('timeflex.session')`);
-  check('session token stored', Boolean(token));
+  const signUp = async (address) => {
+    await click('Create your account');
+    await waitFor(`__has('Let’s set up your department')`);
+    await type('e.g. Goa College of Engineering', 'E2E Test College');
+    await type('e.g. Prof. Anita Mehta', 'Prof. Test Coordinator');
+    await type('you@college.edu', address);
+    await type('At least 8 characters', password);
+    await sleep(200);
+    await click('Create account');
+    await waitFor(`__has('Step 1 of 5') && __has('Who teaches at E2E Test College')`, 15000);
+    return evaluate(`localStorage.getItem('timeflex.session')`);
+  };
 
-  await click('Show me with sample data');
+  // A real first user, from nothing: institution, teachers and what they teach, then a timetable.
+  token = await signUp(firstEmail);
+  check('sign-up opens the step-by-step setup', true);
+  check('session token stored', Boolean(token));
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await sleep(400);
+  check('setup fits a phone screen', (await evaluate(`document.documentElement.scrollWidth - window.innerWidth`)) <= 0);
+  await shot('01a-phone-teachers');
+  await send('Emulation.clearDeviceMetricsOverride');
+  await sleep(200);
+  await click('Paste a list instead');
+  await type('Prof. Mehta: DBMS, Operating Systems\nDr. Rao: Maths\nProf. Iyer: Networks, Networks Lab', 'Prof. Mehta: DBMS, Operating Systems, DBMS Lab\nDr. Rao - Maths\nIyer teaches Networks and Software Engineering\n<img src=x onerror="window.__xss=1">: <script>window.__xss=1</script>');
+  await click('Add them all');
+  await waitFor(`__has('4 teachers added')`);
+  check('a pasted list adds every teacher', await has('Dr. Rao'));
+  await sleep(300);
+  check('code typed as a teacher’s name stays plain text', (await evaluate(`window.__xss === undefined && !document.querySelector('img[src="x"]')`)) && (await has('onerror')));
+  await shot('01c-teachers');
+  await click('Continue');
+  await waitFor(`__has('Step 2 of 5')`);
+  await type('e.g. SE-A', 'SE-A');
+  await click('Add class');
+  await waitFor(`__has('1 class added')`);
+  await click('Continue');
+  await waitFor(`__has('Step 3 of 5')`);
+  await shot('01b-week');
+  await click('Looks right');
+  await waitFor(`__has('Step 4 of 5')`);
+  check('subjects come from what the teachers can teach', (await has('Operating Systems')) && (await has('Software Engineering')) && (await has('DBMS Lab')));
+  await shot('01d-subjects');
+  await click('Continue');
+  await waitFor(`__has('Step 5 of 5')`);
+  check('rooms are suggested', (await has('Room 101')) && (await has('Lab 1')));
+  await click('Continue');
+  await waitFor(`__has('Build 3 versions')`);
+  check('the estimate shows how full the week is', (await has('periods a week')) && (await has('1 class,')));
+  await shot('01e-estimate');
+  await click('Build 3 versions');
+  await waitFor(`__has('3 versions ready to compare')`, 120000);
+  await click('See my timetable');
+  await waitFor(`__has('Compare versions')`, 20000);
+  check('a first user gets a clash-free timetable', await has('No clashes'));
+  await shot('01f-first-timetable');
+  await fetch(`${API}/api/auth/account`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ password }),
+  });
+  await evaluate(`localStorage.clear()`);
+  await go(APP);
+  await waitFor(`__has('planned with you')`);
+
+  // The rest of the app, on the full sample department.
+  token = await signUp(email);
+  await click('Use sample data instead');
   await waitFor(`__has('Build 3 versions')`, 15000);
   await shot('02-onboarding-review');
   await click('Build 3 versions');

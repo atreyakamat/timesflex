@@ -118,6 +118,7 @@ export default function Auth() {
             </Card>
           ) : null}
           <Button label={signup ? 'Create account' : 'Sign in'} size="lg" onPress={submit} disabled={!ok} loading={busy} full />
+          {!signup ? <T v="small">Forgot your password? Ask whoever runs this server to reset it for you.</T> : null}
         </Card>
       </View>
     </Screen>

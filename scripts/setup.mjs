@@ -28,7 +28,7 @@ run(venvPython, ['-m', 'pip', 'install', '--quiet', '-e', '.[dev]'], solver);
 // The app (Android, iOS and web) keeps its own node_modules: it needs React 19, the old web app React 18.
 execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: path.join(root, 'apps/mobile'), stdio: 'inherit', shell: isWindows });
 
-const model = process.env.AI_MODEL ?? 'qwen3:0.6b';
+const model = process.env.AI_MODEL ?? 'qwen2.5:0.5b';
 try {
   const response = await fetch('http://127.0.0.1:11434/api/tags', { signal: AbortSignal.timeout(2000) });
   const { models = [] } = await response.json();

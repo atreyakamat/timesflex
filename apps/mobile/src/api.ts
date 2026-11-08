@@ -14,12 +14,16 @@ import type {
 import type { ModelIntent } from '@core';
 import { storage } from './storage';
 
+let serverOverride: string | null = null;
+
 /**
- * Where the API lives. EXPO_PUBLIC_API_URL wins; otherwise the web build talks to
+ * Where the API lives. An address saved in the app wins, then EXPO_PUBLIC_API_URL ("/" means
+ * this page's own address, used by the Docker web build); otherwise the web build talks to
  * localhost, and a phone talks to the computer running `expo start` (its LAN address),
  * so the same `npm run dev` serves both.
  */
 const apiBase = () => {
+  if (serverOverride) return serverOverride;
   const configured = process.env.EXPO_PUBLIC_API_URL;
   if (configured) return configured.replace(/\/$/, '');
   if (Platform.OS === 'web') return 'http://localhost:3001';
@@ -29,12 +33,34 @@ const apiBase = () => {
 };
 
 const TOKEN_KEY = 'timeflex.session';
+const SERVER_KEY = 'timeflex.server';
 let token: string | null = null;
 let onUnauthorized: () => void = () => {};
 
 export const loadToken = async () => {
+  serverOverride = await storage.get(SERVER_KEY);
   token = await storage.get(TOKEN_KEY);
   return token;
+};
+
+/**
+ * Points the phone app at another server, so one APK keeps working when the server's address
+ * changes. Checks the address really is a TimeFlex server before saving it.
+ */
+export const changeServer = async (address: string) => {
+  const trimmed = address.trim().replace(/\/+$/, '');
+  const url = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  let isTimeFlex = false;
+  try {
+    const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(6000) });
+    isTimeFlex = response.ok && (await response.json()).service === 'timesflex-api';
+  } catch {
+    // Reported below.
+  }
+  if (!isTimeFlex) throw new Error(`No TimeFlex server found at ${url}. Check the address, and that this phone is on the same network.`);
+  serverOverride = url;
+  await storage.set(SERVER_KEY, url);
+  return url;
 };
 const setToken = async (value: string | null) => {
   token = value;
@@ -62,7 +88,7 @@ const request = async <T>(path: string, options: { method?: string; body?: unkno
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     });
   } catch {
-    throw new ApiError(`Cannot reach the TimeFlex server at ${apiBase()}. Is it running?`, 0);
+    throw new ApiError(`Cannot reach the TimeFlex server${apiBase() ? ` at ${apiBase()}` : ''}. Is it running?`, 0);
   }
   if (!response.ok) {
     const text = await response.text();
@@ -88,6 +114,12 @@ export const api = {
     await setToken(session.token ?? null);
     return session;
   },
+  async startDemo() {
+    const session = await request<AccountSession>('/api/auth/demo', { method: 'POST', body: {} });
+    await setToken(session.token ?? null);
+    return session;
+  },
+  changePassword: (current: string, next: string) => request('/api/auth/password', { method: 'POST', body: { current, next } }),
   async signIn(email: string, password: string) {
     const session = await request<AccountSession>('/api/auth/login', { method: 'POST', body: { email, password } });
     await setToken(session.token ?? null);

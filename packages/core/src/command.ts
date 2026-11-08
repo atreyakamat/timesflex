@@ -19,16 +19,22 @@ export interface CommandResult {
 }
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const DAY_RE = /\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)[a-z]*\b/gi;
-const NUMBER_WORDS: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, once: 1, twice: 2 };
+const DAY_RE = /\b(mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)s?\b/gi;
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12, fifteen: 15,
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, hundred: 100, once: 1, twice: 2,
+};
+const AWAY = /\b(absent|away|on leave|leave|sick|unwell|ill|off|not coming|not in|won'?t be in|can'?t come|unavailable|out|conference|seminar|attending|workshop|training|travell?ing|appointment|medical|holiday|vacation)\b/i;
 
 const dayName = (token: string) => WEEKDAYS.find((day) => day.toLowerCase().startsWith(token.toLowerCase().slice(0, 3))) ?? null;
 const numberIn = (text: string) => {
   const digit = /\b(\d{1,3})\b/.exec(text);
   if (digit) return Number(digit[1]);
-  const word = Object.keys(NUMBER_WORDS).find((w) => new RegExp(`\\b${w}\\b`, 'i').test(text));
-  return word ? NUMBER_WORDS[word] : null;
+  const word = new RegExp(`\\b(${Object.keys(NUMBER_WORDS).join('|')})\\b`, 'i').exec(text);
+  return word ? NUMBER_WORDS[word[1].toLowerCase()] : null;
 };
+/** A limit's number, so "three lectures in one day" means three, not one. */
+const limitIn = (text: string) => numberIn(text.replace(/\b(?:in |per )?(?:one|a|each|every) (?:day|week)\b/gi, ' '));
 const stripTitle = (name: string) => name.replace(/^(prof|dr|mr|mrs|ms)\.?\s+/i, '').toLowerCase();
 
 /** The teacher named in the text: full name first, then any distinctive word of their name. */
@@ -64,6 +70,18 @@ export const dateIn = (text: string, today: Date): string | null => {
   return toDateKey(new Date(base.getFullYear(), base.getMonth(), base.getDate() + ahead));
 };
 
+/** "next week", "early next week", "this week" as Monday-to-Friday dates. */
+const weekSpanIn = (text: string, today: Date): { from: string; to: string } | null => {
+  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const at = (offset: number) => toDateKey(new Date(base.getFullYear(), base.getMonth(), base.getDate() + offset));
+  const toMonday = (8 - base.getDay()) % 7 || 7;
+  if (/\bnext week\b/i.test(text)) {
+    return /\b(early|start of|beginning of)\b/i.test(text) ? { from: at(toMonday), to: at(toMonday + 1) } : { from: at(toMonday), to: at(toMonday + 4) };
+  }
+  if (/\bthis week\b/i.test(text) && base.getDay() >= 1 && base.getDay() <= 5) return { from: at(0), to: at(5 - base.getDay()) };
+  return null;
+};
+
 const STYLE_WORDS: [RegExp, VariantStyle][] = [
   [/compact|finish(es)? early|short(er)? days?|ends? early/i, 'compact'],
   [/even|spread|balanced load/i, 'spread'],
@@ -74,7 +92,8 @@ const STYLE_WORDS: [RegExp, VariantStyle][] = [
 const styleIn = (text: string): VariantStyle => STYLE_WORDS.find(([re]) => re.test(text))?.[1] ?? 'balanced';
 
 export const parseCommand = (input: string, profile: ProfileData, today = new Date()): CommandResult => {
-  const text = input.trim();
+  // Phones type curly apostrophes, and the patterns below expect straight ones.
+  const text = input.trim().replace(/[\u2018\u2019]/g, "'");
   const teacher = findTeacher(text, profile.teachers);
   const nothing = (reply: string): CommandResult => ({ actions: [], reply, understood: false });
 
@@ -90,7 +109,16 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
   }
 
   // Absence and leave.
-  if (teacher && /\b(absent|away|on leave|leave|sick|off|not coming|unavailable|out)\b/i.test(text) && /\b(today|tomorrow|\d{4}-\d{2}-\d{2}|from|this|next|on)\b/i.test(text)) {
+  if (teacher && AWAY.test(text) && /\b(today|tomorrow|\d{4}-\d{2}-\d{2}|from|this|next|on|week)\b/i.test(text)) {
+    const span = weekSpanIn(text, today);
+    if (span) {
+      const reason = /\b(conference|sick|medical|exam duty|training|workshop|personal)\b/i.exec(text)?.[1];
+      return {
+        actions: [{ type: 'leave', teacherId: teacher.id, ...span, ...(reason ? { reason } : {}) }],
+        reply: `I'll mark ${teacher.name} on leave from ${span.from} to ${span.to}. You can arrange cover in Substitutions.`,
+        understood: true,
+      };
+    }
     const range = /\bfrom\b(.+?)\b(to|until|till)\b(.+)$/i.exec(text);
     if (range) {
       const from = dateIn(range[1], today);
@@ -115,7 +143,7 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
   }
 
   // Standing days off: "Rao can't teach on Fridays", "Iyer is not available on Mondays".
-  if (teacher && /\b(can'?t|cannot|doesn'?t|does not|not available|unavailable|never|off)\b/i.test(text)) {
+  if (teacher && /\b(can'?t|cannot|doesn'?t|does not|don'?t|won'?t|not available|unavailable|never|off|free|shouldn'?t)\b/i.test(text)) {
     const days = [...text.matchAll(new RegExp(DAY_RE.source, 'gi'))].map((m) => dayName(m[1])).filter(Boolean) as string[];
     if (days.length) {
       return {
@@ -127,8 +155,8 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
   }
 
   // Limits: "max 3 a day for Iyer", "Rao can teach 16 periods a week".
-  if (teacher && /\b(max|maximum|at most|up to|limit|only|can teach)\b/i.test(text)) {
-    const n = numberIn(text.replace(new RegExp(stripTitle(teacher.name), 'i'), ''));
+  if (teacher && /\b(max|maximum|at most|up to|limit|only|can teach|more than)\b/i.test(text)) {
+    const n = limitIn(text.replace(new RegExp(stripTitle(teacher.name), 'i'), ''));
     if (n) {
       const perWeek = /\bweek/i.test(text);
       return {
@@ -140,7 +168,7 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
   }
 
   // Adding things.
-  const addTeacher = /\badd (?:a )?(?:new )?(?:teacher|professor|faculty|lecturer)\s+(.+?)(?:,|\s+(?:who|expert|specialis|teaches|for)\b|$)/i.exec(text);
+  const addTeacher = /\badd (?:a )?(?:new )?(?:teacher|professor|faculty|lecturer)\s+(?:named\s+|called\s+)?(.+?)(?:,|\s+(?:who|expert|specialis|teaches|for)\b|$)/i.exec(text);
   if (addTeacher) {
     const name = addTeacher[1].trim();
     const expertise = /\b(?:expert in|specialis(?:es|ed|t) in|teaches|knows)\s+(.+)$/i.exec(text)?.[1]
@@ -153,6 +181,32 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
       understood: true,
     };
   }
+  // "We hired Dr. Nair who does physics", "a new teacher called Asha Rao joined".
+  if (/\b(hired|hiring|joined|joining|new (?:teacher|professor|faculty|lecturer|person|colleague))\b/i.test(text)) {
+    const called = /\b(?:called|named)\s+((?:(?:Prof|Dr|Mr|Mrs|Ms)\.?\s+)?[A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)*)/.exec(text) ?? /\b((?:Prof|Dr|Mr|Mrs|Ms)\.?\s+[A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)*)/.exec(text);
+    if (called) {
+      const name = called[1].trim();
+      const expertise = /\b(?:who (?:does|teaches|knows)|to teach|expert in|teaches)\s+(.+)$/i.exec(text)?.[1]
+        .split(/,|\band\b/)
+        .map((item) => item.trim().replace(/\.$/, ''))
+        .filter(Boolean);
+      return {
+        actions: [{ type: 'addTeacher', name, ...(expertise?.length ? { expertise } : {}) }],
+        reply: `I'll add ${name}${expertise?.length ? `, who can teach ${expertise.join(', ')}` : ''}.`,
+        understood: true,
+      };
+    }
+  }
+  // "We got a new computer lab with forty seats".
+  const newRoom = /\b(?:new|another|(?:now )?have an?|got an?)\s+(?:new\s+)?((?:[a-z-]+\s+)??(lab|classroom|room|hall))\b/i.exec(text);
+  if (newRoom) {
+    const kind = newRoom[2].toLowerCase();
+    const roomType = kind === 'lab' ? 'lab' : kind === 'hall' ? 'seminar-hall' : 'classroom';
+    const words = newRoom[1].trim().split(/\s+/).map((word) => word[0].toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+    const name = words.includes(' ') ? words : `New ${words}`;
+    const capacity = numberIn(text) ?? (roomType === 'lab' ? 30 : roomType === 'seminar-hall' ? 120 : 60);
+    return { actions: [{ type: 'addRoom', name, roomType, capacity }], reply: `I'll add ${name} with ${capacity} seats.`, understood: true };
+  }
   const addRoom = /\badd (?:a )?(?:new )?(lab|room|classroom|hall|seminar hall)\s+([\w -]+?)(?:\s+(?:with|for|of)\b|,|$)/i.exec(text);
   if (addRoom) {
     const kind = addRoom[1].toLowerCase();
@@ -162,7 +216,7 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
     const capacity = numberIn(text.replace(label, '')) ?? (roomType === 'lab' ? 30 : roomType === 'seminar-hall' ? 120 : 60);
     return { actions: [{ type: 'addRoom', name, roomType, capacity }], reply: `I'll add ${name} with ${capacity} seats.`, understood: true };
   }
-  const addClass = /\badd (?:a )?(?:new )?(?:class|division|section)\s+([\w-]+)/i.exec(text);
+  const addClass = /\badd (?:a )?(?:new )?(?:class|division|section)\s+(?:called\s+|named\s+)?([\w-]+)/i.exec(text) ?? /\badd\s+([A-Z][\w-]*)\s*,?\s*(?:with\s+)?\d+\s*students/.exec(text);
   if (addClass) {
     const size = /(\d+)\s*students/i.exec(text)?.[1];
     const batchCount = /(\d+|two|three|four)\s*(?:lab )?batch/i.exec(text)?.[1];
@@ -203,7 +257,7 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
     }
   }
   if (teacher && /\b(teach|teaches)\b/i.test(text) && !subject) {
-    const what = /\bteach(?:es)?\s+(.+?)(?:\s+(\d+|once|twice)\b.*)?$/i.exec(text)?.[1]?.trim();
+    const what = /\bteach(?:es)?\s+(.+?)(?:\s+(\d+|once|twice)\b.*)?$/i.exec(text)?.[1]?.replace(/[?.!]+$/, '').replace(/\s+(instead|please|now|too|also|as well|from now on)$/i, '').trim();
     if (what) {
       const isLab = /\blab\b/i.test(what);
       const times = numberIn(text) ?? (isLab ? 1 : 3);
@@ -216,7 +270,7 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
   }
 
   // Hours and days.
-  const hours = /\b(?:start|starts|begin|from)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?.*?\b(?:end|ends|finish|till|until|to)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(text);
+  const hours = /\b(?:start|starts|begin|from)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?.*?\b(?:end|ends|finish|finishes|till|until|to|by)\s+(?:at\s+|by\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(text);
   if (hours && /\b(day|class|classes|college|school|teaching)\b/i.test(text)) {
     const fmt = (h: string, m: string | undefined, ap: string | undefined, isEnd: boolean) => {
       let hour = Number(h) % 24;
@@ -255,6 +309,64 @@ export interface ModelIntent {
   expertise?: string[];
   style?: VariantStyle | null;
 }
+
+/** Words that must be in the sentence for the model's reading of it to be believed. */
+const EVIDENCE: Record<string, RegExp> = {
+  absent: AWAY,
+  leave: AWAY,
+  day_off: /\b(can'?t|cannot|never|not|no|don'?t|doesn'?t|off|unavailable|free)\b/i,
+  limit_day: /\b(max|maximum|most|limit|more than|no more|only|fewer|less)\b/i,
+  limit_week: /\b(max|maximum|most|limit|more than|no more|only|fewer|less)\b/i,
+  add_teacher: /\b(hire|hired|hiring|joined|joining|new|add)\b/i,
+  add_room: /\b(room|lab|hall|classroom)\b/i,
+  add_class: /\b(class|division|section)\b/i,
+  assign: /\b(teach|teaches|teaching|take|takes|give|assign|handle|handles)\b/i,
+  add_subject: /\b(teach|teaches|teaching|take|takes|give|assign|handle|handles)\b/i,
+  generate: /\b(?:build|make|generate|create|redo|regenerate|rebuild|need|new|fresh|another)\b.*\b(?:timetable|schedule|week)\b/i,
+  variations: /\b(variation|variant|option|version|alternative)s?\b/i,
+};
+const NEEDS_TEACHER = new Set(['absent', 'leave', 'day_off', 'limit_day', 'limit_week', 'assign', 'add_subject']);
+
+/**
+ * A very small model is often confidently wrong, so its answer is only a hint about which kind
+ * of request this is. The sentence must back it up, and every detail (who, when, how many) is
+ * taken from the sentence itself. Anything it can't support is treated as not understood.
+ */
+export const understandModelReply = (intent: ModelIntent, text: string, profile: ProfileData, today = new Date()): CommandResult => {
+  const unsure: CommandResult = { actions: [], reply: 'I did not catch that. Try “Mehta is on leave from Monday to Wednesday” or “make 3 variations”.', understood: false };
+  const evidence = EVIDENCE[intent.intent];
+  if (!evidence?.test(text) || /\b(delete|remove|send|email|e-mail|print|share|who|what|when|where|why|how)\b/i.test(text)) return unsure;
+  const teacher = findTeacher(text, profile.teachers);
+  if (NEEDS_TEACHER.has(intent.intent) && !teacher) return unsure;
+  const said = (value?: string | null) => (value?.trim() && text.toLowerCase().includes(value.trim().toLowerCase()) ? value.trim() : null);
+  const weekday = new RegExp(DAY_RE.source, 'i').exec(text)?.[1] ?? null;
+  const span = weekSpanIn(text, today);
+  const range = /\bfrom\b(.+?)\b(?:to|until|till)\b(.+)$/i.exec(text);
+  const from = span?.from ?? (range ? dateIn(range[1], today) : dateIn(text, today));
+  const to = span?.to ?? (range ? dateIn(range[2], today) : from);
+  const remainder = teacher ? text.replace(new RegExp(stripTitle(teacher.name), 'i'), '') : text;
+  const perWeek = /\bweek/i.test(text);
+  const kind = intent.intent === 'limit_day' || intent.intent === 'limit_week' ? (perWeek ? 'limit_week' : 'limit_day') : intent.intent;
+  const result = actionsFromIntent(
+    {
+      intent: kind,
+      teacher: kind === 'add_teacher' ? said(intent.teacher) : (teacher?.name ?? null),
+      subject: said(intent.subject),
+      class_name: said(intent.class_name),
+      room_name: said(intent.room_name),
+      date_from: from,
+      date_to: to,
+      day: weekday,
+      number: kind.startsWith('limit') ? limitIn(remainder) : numberIn(remainder),
+      expertise: (intent.expertise ?? []).filter((item) => said(item)),
+      style: styleIn(text),
+    },
+    profile,
+    today,
+  );
+  // Half-understood is worse than not understood: only a complete action is offered.
+  return result.actions.length ? result : { ...unsure, reply: teacher && result.reply ? result.reply : unsure.reply };
+};
 
 /**
  * Turn the model's classification into actions, checking every name against the real

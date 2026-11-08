@@ -6,7 +6,7 @@ import { claudeJson, claudeStatus, DEFAULT_CLAUDE_MODEL } from './anthropic.js';
  * - provider "anthropic": Claude (Sonnet 5.5 by default) through the official SDK; chosen
  *   automatically when ANTHROPIC_API_KEY is set. See anthropic.js.
  * - provider "ollama": native /api/chat with `format` = JSON schema (grammar-constrained
- *   decoding) and `think: false`, which keeps tiny reasoning models (Qwen3 0.6B/1.7B) fast.
+ *   decoding) and `think: false`, which keeps tiny reasoning models (such as Qwen3) fast.
  * - provider "openai": any OpenAI-compatible server (LM Studio, llama.cpp llama-server, vLLM)
  *   using `response_format: { type: "json_schema" }`.
  * - provider "off": skip the model and use the rule-based parser only.
@@ -21,7 +21,7 @@ export const aiConfig = () => {
   return {
     provider,
     baseUrl: (process.env.AI_BASE_URL ?? defaults[provider] ?? '').replace(/\/$/, ''),
-    model: process.env.AI_MODEL ?? (provider === 'anthropic' ? DEFAULT_CLAUDE_MODEL : 'qwen3:0.6b'),
+    model: process.env.AI_MODEL ?? (provider === 'anthropic' ? DEFAULT_CLAUDE_MODEL : 'qwen2.5:0.5b'),
     apiKey: process.env.AI_API_KEY ?? 'local',
     timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 120000),
     numCtx: Number(process.env.AI_NUM_CTX ?? 4096),

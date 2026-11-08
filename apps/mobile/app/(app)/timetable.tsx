@@ -268,7 +268,7 @@ export default function Timetable() {
                 </View>
                 {days.map((d) => (
                   <View key={d} style={{ flex: 1, padding: 3 }}>
-                    {(grid[d]?.[slot] ?? []).map((s) => (s.slot === slot ? tile(s, true) : <View key={s.id} style={{ height: 18, borderRadius: 6, backgroundColor: `hsla(${hue(s.subject_id)},${c.tile.sat}%,${c.tile.light}%,${c.tile.alpha * 0.6})`, marginBottom: 4 }} />))}
+                    {(grid[d]?.[slot] ?? []).map((s) => (s.slot === slot ? tile(s, true) : <View key={s.id} style={{ borderRadius: 10, borderLeftWidth: 3, borderLeftColor: `hsl(${hue(s.subject_id)},${c.tile.edgeSat}%,${c.tile.edgeLight}%)`, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: `hsla(${hue(s.subject_id)},${c.tile.sat}%,${c.tile.light}%,${c.tile.alpha})`, marginBottom: 4 }}><T v="small" numberOfLines={1} style={{ fontSize: 11 }}>{names[s.subject_id]} continues</T></View>))}
                   </View>
                 ))}
               </View>

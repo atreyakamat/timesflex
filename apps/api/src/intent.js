@@ -51,7 +51,14 @@ Intents:
 - add_teacher (teacher, expertise), add_room (room_name, number = seats), add_class (class_name, number = students).
 - assign: teacher teaches an existing subject (optionally class_name). add_subject: teacher teaches a new subject, number = times per week.
 - generate: build a timetable (style). variations: build several versions (number).
-- hours: change the teaching day. unknown: anything else.`;
+- hours: change the teaching day. unknown: anything else, including questions and requests to delete things.
+Examples:
+"Rao is at a conference on Friday" -> {"intent":"absent","teacher":"Rao","day":"Friday"}
+"Shah cannot teach on Mondays" -> {"intent":"day_off","teacher":"Shah","day":"Monday"}
+"no more than 3 lectures a day for Iyer" -> {"intent":"limit_day","teacher":"Iyer","number":3}
+"we need a new lab called Lab 4" -> {"intent":"add_room","room_name":"Lab 4"}
+"show me some other options" -> {"intent":"variations"}
+"what is the weather" -> {"intent":"unknown"}`;
 
 export const interpretCommand = async (text, context = {}) => {
   const started = Date.now();

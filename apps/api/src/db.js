@@ -89,7 +89,20 @@ export class DuplicateEmailError extends Error {
  */
 export const createPgStore = async (connectionString) => {
   const pool = new Pool({ connectionString });
-  const client = await pool.connect();
+  // A dropped idle connection must not take the API down. The pool reconnects on the next query.
+  pool.on('error', (error) => console.warn('Database connection lost:', error.message));
+
+  // The database may still be starting.
+  let client;
+  for (let attempt = 1; !client; attempt += 1) {
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      if (attempt >= 30) throw new Error(`Could not reach the database: ${error.message}`);
+      console.warn(`Waiting for the database (${attempt}): ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
   try {
     await client.query(schema);
   } finally {
@@ -115,6 +128,13 @@ export const createPgStore = async (connectionString) => {
         throw error;
       }
     },
+    async updateAccountPassword(id, passwordHash) {
+      await pool.query('UPDATE accounts SET password_hash = $1 WHERE id = $2', [passwordHash, id]);
+    },
+    async listDemoAccountIds(emailSuffix, createdBefore) {
+      const result = await pool.query('SELECT id FROM accounts WHERE email LIKE $1 AND created_at < $2', [`%${emailSuffix}`, createdBefore]);
+      return result.rows.map((row) => row.id);
+    },
     async getAccount(id) {
       const result = await pool.query('SELECT * FROM accounts WHERE id = $1', [id]);
       return result.rows[0] ? toAccount(result.rows[0]) : null;
@@ -137,6 +157,12 @@ export const createPgStore = async (connectionString) => {
     },
     async deleteSession(tokenHash) {
       await pool.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
+    },
+    async deleteAccountSessions(accountId, keepTokenHash = '') {
+      await pool.query('DELETE FROM sessions WHERE account_id = $1 AND token_hash <> $2', [accountId, keepTokenHash]);
+    },
+    async deleteExpiredSessions() {
+      await pool.query('DELETE FROM sessions WHERE expires_at <= NOW()');
     },
     /** Removes the account with its sessions, institutions and their timetables. */
     async deleteAccount(id) {
@@ -184,6 +210,15 @@ export const createPgStore = async (connectionString) => {
         [id, institutionId, label ?? null, status ?? 'draft', JSON.stringify(request ?? {}), '[]'],
       );
       return getTimetable(id);
+    },
+    async pruneTimetables(institutionId, keep) {
+      await pool.query(
+        `DELETE FROM timetables WHERE id IN (
+           SELECT id FROM timetables WHERE institution_id = $1 AND status <> 'approved'
+           ORDER BY created_at DESC OFFSET $2
+         )`,
+        [institutionId, keep],
+      );
     },
     async listTimetables(institutionId) {
       const result = await pool.query(
@@ -235,6 +270,14 @@ export const createFileStore = async (filePath) => {
       await persist();
       return clone(record);
     },
+    async updateAccountPassword(id, passwordHash) {
+      const record = state.accounts.find((item) => item.id === id);
+      if (record) record.passwordHash = passwordHash;
+      await persist();
+    },
+    async listDemoAccountIds(emailSuffix, createdBefore) {
+      return state.accounts.filter((item) => item.email.endsWith(emailSuffix) && new Date(item.createdAt) < new Date(createdBefore)).map((item) => item.id);
+    },
     async getAccount(id) {
       return clone(state.accounts.find((item) => item.id === id));
     },
@@ -252,6 +295,14 @@ export const createFileStore = async (filePath) => {
     },
     async deleteSession(tokenHash) {
       state.sessions = state.sessions.filter((item) => item.tokenHash !== tokenHash);
+      await persist();
+    },
+    async deleteAccountSessions(accountId, keepTokenHash = '') {
+      state.sessions = state.sessions.filter((item) => item.accountId !== accountId || item.tokenHash === keepTokenHash);
+      await persist();
+    },
+    async deleteExpiredSessions() {
+      state.sessions = state.sessions.filter((item) => new Date(item.expiresAt) > new Date());
       await persist();
     },
     /** Removes the account with its sessions, institutions and their timetables. */
@@ -309,6 +360,17 @@ export const createFileStore = async (filePath) => {
       state.timetables.push(record);
       await persist();
       return clone(record);
+    },
+    async pruneTimetables(institutionId, keep) {
+      const stale = new Set(
+        state.timetables
+          .filter((item) => item.institutionId === institutionId && item.status !== 'approved')
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(keep)
+          .map((item) => item.id),
+      );
+      state.timetables = state.timetables.filter((item) => !stale.has(item.id));
+      await persist();
     },
     async listTimetables(institutionId) {
       return clone(

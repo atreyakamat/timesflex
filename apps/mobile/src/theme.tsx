@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useColorScheme } from 'react-native';
+import { Platform, useColorScheme } from 'react-native';
 import { storage } from './storage';
 
 export type ThemeName = 'light' | 'dark';
@@ -112,6 +112,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resolved: ThemeName = choice === 'system' ? (system === 'dark' ? 'dark' : 'light') : choice;
+
+  // In the browser, scrollbars and form controls follow the theme too.
+  useEffect(() => {
+    if (Platform.OS === 'web') globalThis.document?.documentElement.style.setProperty('color-scheme', resolved);
+  }, [resolved]);
   const value = useMemo(() => {
     const setChoice = (next: Choice) => {
       setChoiceState(next);

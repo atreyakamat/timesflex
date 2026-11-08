@@ -10,3 +10,4 @@ export * from './explain';
 export * from './insights';
 export * from './learning';
 export * from './draft';
+export * from './onboarding';

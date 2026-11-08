@@ -95,6 +95,7 @@ interface Store {
   isNew: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (body: Parameters<typeof api.signUp>[0]) => Promise<void>;
+  startDemo: () => Promise<void>;
   signOut: () => Promise<void>;
   update: (change: (profile: Profile) => Profile) => void;
   updateOperations: (change: (ops: OperationsData) => OperationsData) => void;
@@ -307,16 +308,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const generateVariants = useCallback(
     async (styles: GenerateStyle[], base = profile) => {
       const made: TimetableRecord[] = [];
+      let last: { unscheduled_sessions: SessionRequest[]; diagnostics?: string[] } | null = null;
+      let short = 0;
       try {
         for (const [index, style] of styles.entries()) {
           setBusy(`Building version ${index + 1} of ${styles.length}…`);
           // Several versions at once: a shorter search each keeps the wait reasonable.
-          const { timetable } = await solveOne(style, versions.length + made.length + 1, false, base, 6);
+          const { timetable, solver } = await solveOne(style, versions.length + made.length + 1, false, base, 6);
           made.unshift(timetable);
+          last = solver;
+          if (solver.unscheduled_sessions.length) short += 1;
         }
         setVersions((list) => [...made, ...list]);
-        if (made.length) show(made[made.length - 1]);
-        return `${made.length} versions ready to compare.`;
+        // The first version built is the one shown, so show its notes too: `last` is only the final one.
+        if (made.length) show(made[made.length - 1], made.length === 1 ? (last?.unscheduled_sessions ?? []) : [], made.length === 1 ? (last?.diagnostics ?? []) : []);
+        const ready = `${made.length} versions ready to compare.`;
+        return short ? `${ready} In ${short} of them some classes could not fit, so check who is overloaded before approving.` : ready;
       } finally {
         setBusy(null);
       }
@@ -362,6 +369,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     isNew,
     signIn: async (email, password) => open(await api.signIn(email, password), false),
     signUp: async (body) => open(await api.signUp(body), true),
+    startDemo: async () => open(await api.startDemo(), true),
     signOut: async () => {
       await api.signOut().catch(() => {});
       reset();
