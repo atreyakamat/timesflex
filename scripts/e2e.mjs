@@ -139,6 +139,7 @@ const type = (placeholder, value) => evaluate(`__type(${JSON.stringify(placehold
 const has = (text) => evaluate(`__has(${JSON.stringify(text)})`);
 
 let token = null;
+const check0Close = () => evaluate(`[...document.querySelectorAll('[aria-label="Close"]')].filter(__visible).pop().click()`);
 try {
   await send('Page.enable');
   await send('Runtime.enable');
@@ -158,7 +159,7 @@ try {
     await type('At least 8 characters', password);
     await sleep(200);
     await click('Create account');
-    await waitFor(`__has('Step 1 of 5') && __has('Who teaches at E2E Test College')`, 15000);
+    await waitFor(`__has('Step 1 of 4') && __has('classes at E2E Test College')`, 15000);
     return evaluate(`localStorage.getItem('timeflex.session')`);
   };
 
@@ -172,39 +173,90 @@ try {
   await shot('01a-phone-teachers');
   await send('Emulation.clearDeviceMetricsOverride');
   await sleep(200);
+  const press = (label) => evaluate(`(() => { const el = [...document.querySelectorAll('[aria-label]')].find((x) => x.getAttribute('aria-label') === ${JSON.stringify(label)} && __visible(x)); if (!el) throw new Error('no button ' + ${JSON.stringify(label)}); el.click(); return true; })()`);
+  // Step 1: tap the years and branches, make one year common, split one box into divisions.
+  for (const chip of ['FY', 'SY', 'Comp', 'IT']) await click(chip);
+  await waitFor(`__has('SY Comp') && __has('SY IT') && __has('FY Comp')`);
+  check('tapping years and branches makes the grid', true);
+  await click('FY: same for all branches');
+  await waitFor(`!__has('FY Comp')`);
+  check('a year can be common to all branches', true);
+  await press('More divisions for SY Comp');
+  await waitFor(`__has('4 classes')`);
+  await shot('01b-classes');
+  check('the grid counts classes and students', await has('240 students'));
+  await click('Continue');
+  await waitFor(`__has('Step 2 of 4')`);
+
+  // Step 2: each year and branch gets its subjects; another can copy them.
+  await type('e.g. DBMS, Operating Systems, DBMS Lab', 'Maths');
+  await click('Add subjects');
+  await waitFor(`__has('1 subject')`);
+  await click('SY Comp');
+  await waitFor(`__has('Subjects for SY Comp')`);
+  await type('e.g. DBMS, Operating Systems, DBMS Lab', 'DBMS, Operating Systems, DBMS Lab');
+  await click('Add subjects');
+  await waitFor(`__has('Operating Systems')`);
+  await click('SY IT');
+  await waitFor(`__has('Subjects for SY IT')`);
+  await click('Copy from SY Comp');
+  await waitFor(`__has('Operating Systems')`);
+  check('another branch can copy subjects', true);
+  await shot('01c-subjects');
+  await click('Continue');
+  await waitFor(`__has('Step 3 of 4')`);
+
+  // Step 3: paste links teachers to subjects; one subject is split between divisions.
   await click('Paste a list instead');
-  await type('Prof. Mehta: DBMS, Operating Systems\nDr. Rao: Maths\nProf. Iyer: Networks, Networks Lab', 'Prof. Mehta: DBMS, Operating Systems, DBMS Lab\nDr. Rao - Maths\nIyer teaches Networks and Software Engineering\n<img src=x onerror="window.__xss=1">: <script>window.__xss=1</script>');
+  await type('Prof. Mehta: DBMS, Operating Systems\nDr. Rao: Maths\nProf. Iyer: Networks, Networks Lab', 'Prof. Mehta: DBMS, DBMS Lab\nDr. Rao - Maths\nIyer teaches Operating Systems, Thermodynamics\n<img src=x onerror="window.__xss=1">');
   await click('Add them all');
-  await waitFor(`__has('4 teachers added')`);
-  check('a pasted list adds every teacher', await has('Dr. Rao'));
+  await waitFor(`__has('4 teachers')`);
   await sleep(300);
+  check('a pasted list links teachers to their subjects', await has('All subjects have a teacher'));
+  check('a subject that doesn’t exist is reported, not lost', await has('Thermodynamics'));
   check('code typed as a teacher’s name stays plain text', (await evaluate(`window.__xss === undefined && !document.querySelector('img[src="x"]')`)) && (await has('onerror')));
-  await shot('01c-teachers');
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await sleep(400);
+  check('setup fits a phone screen', (await evaluate(`document.documentElement.scrollWidth - window.innerWidth`)) <= 0);
+  await shot('01a-phone-teachers');
+  await send('Emulation.clearDeviceMetricsOverride');
+  await sleep(200);
+  await press('Change teacher for DBMS in SY Comp');
+  await waitFor(`__has('Split by division')`);
+  await press('Split DBMS for SY Comp by division');
+  await waitFor(`__has('SY Comp A') && __has('SY Comp B')`);
+  await press('Dr. Rao for DBMS in SY Comp B');
+  await sleep(300);
+  await shot('01d-teachers');
+  check('one subject can have a different teacher per division', await has('All subjects have a teacher'));
   await click('Continue');
-  await waitFor(`__has('Step 2 of 5')`);
-  await type('e.g. SE-A', 'SE-A');
-  await click('Add class');
-  await waitFor(`__has('1 class added')`);
-  await click('Continue');
-  await waitFor(`__has('Step 3 of 5')`);
-  await shot('01b-week');
-  await click('Looks right');
-  await waitFor(`__has('Step 4 of 5')`);
-  check('subjects come from what the teachers can teach', (await has('Operating Systems')) && (await has('Software Engineering')) && (await has('DBMS Lab')));
-  await shot('01d-subjects');
-  await click('Continue');
-  await waitFor(`__has('Step 5 of 5')`);
+  await waitFor(`__has('Step 4 of 4')`);
+
+  // Step 4: rooms and the week, then the estimate.
   check('rooms are suggested', (await has('Room 101')) && (await has('Lab 1')));
-  await click('Continue');
+  await shot('01e-rooms-week');
+  await click('Looks right');
   await waitFor(`__has('Build 3 versions')`);
-  check('the estimate shows how full the week is', (await has('periods a week')) && (await has('1 class,')));
-  await shot('01e-estimate');
+  check('the estimate shows how full the week is', (await has('periods a week')) && (await has('4 classes,')));
+  await shot('01f-estimate');
   await click('Build 3 versions');
   await waitFor(`__has('3 versions ready to compare')`, 120000);
   await click('See my timetable');
   await waitFor(`__has('Compare versions')`, 20000);
   check('a first user gets a clash-free timetable', await has('No clashes'));
-  await shot('01f-first-timetable');
+  await shot('01g-first-timetable');
+  await click('SY Comp');
+  await waitFor(`__has('SY Comp B')`, 5000);
+  check('classes can be narrowed down by year and branch', true);
+  const firstSaved = await (await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  const firstVersions = await (await fetch(`${API}/api/institutions/${firstSaved.institution.id}/timetables`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  const saved = firstSaved.institution.data.profile ?? firstSaved.institution.data;
+  const dbms = saved.subjects.find((s) => s.name === 'DBMS' && s.group === 'SY|Comp');
+  const divisionB = saved.divisions.find((x) => x.name === 'SY Comp B');
+  const divisionA = saved.divisions.find((x) => x.name === 'SY Comp A');
+  const sessionsOf = (division) => firstVersions[0].generatedSessions.filter((x) => x.subject_id === dbms.id && x.division_id === division.id);
+  const nameOf = (id) => saved.teachers.find((x) => x.id === id)?.name;
+  check('the timetable uses each division’s own teacher', sessionsOf(divisionA).every((x) => nameOf(x.teacher_id) === 'Prof. Mehta') && sessionsOf(divisionB).every((x) => nameOf(x.teacher_id) === 'Dr. Rao') && sessionsOf(divisionB).length > 0);
   await fetch(`${API}/api/auth/account`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -286,8 +338,19 @@ try {
 
   await go(`${APP}/timetable`);
   await waitFor(`__has('Compare versions')`, 15000);
-  await evaluate(`(() => { const tile = [...document.querySelectorAll('[aria-label$="Tap for details"]')].find(__visible); tile.click(); return true; })()`);
-  await waitFor(`__has('Change the room')`, 5000);
+  // Not every class has another room free, so look for one that does.
+  const tiles = await evaluate(`[...document.querySelectorAll('[aria-label$="Tap for details"]')].filter(__visible).length`);
+  let roomOffered = false;
+  for (let i = 0; i < tiles && !roomOffered; i += 1) {
+    await evaluate(`[...document.querySelectorAll('[aria-label$="Tap for details"]')].filter(__visible)[${i}].click()`);
+    await waitFor(`__has('Why it is here')`, 5000);
+    roomOffered = await has('Change the room');
+    if (!roomOffered) {
+      await check0Close();
+      await sleep(300);
+    }
+  }
+  if (!roomOffered) throw new Error('no class had another room free');
   await sleep(500);
   await shot('11-change-room');
   check('a class offers free rooms to change to', true);
@@ -334,8 +397,13 @@ try {
   ws.close();
   chrome.kill();
   await sleep(300);
-  rmSync(profileDir, { recursive: true, force: true });
   const failed = results.filter((r) => !r.ok).length;
   console.log(`\n${results.length - failed}/${results.length} checks passed`);
+  // Chrome can hold its folder a moment longer, and that must not hide the result.
+  try {
+    rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+  } catch {
+    // A temporary folder left behind does no harm.
+  }
   process.exitCode = failed ? 1 : 0;
 }

@@ -34,6 +34,10 @@ export interface DivisionForm {
   yearLabel?: string;
   /** Class teacher / mentor (a teacher id). */
   classTeacherId?: string;
+  /** Set when the class comes from the institute grid: "SY", "Comp", and their combined key. */
+  year?: string;
+  branch?: string;
+  group?: string;
   /** Optional class list. When present, it sets the division size and the lab batches. */
   students?: StudentRecord[];
 }
@@ -95,6 +99,8 @@ export interface SubjectForm {
   teacherId: string;
   /** Empty means the solver picks any suitable room. */
   roomId: string;
+  /** The year and branch this subject belongs to, when it comes from the institute grid. */
+  group?: string;
   /** Divisions that take this subject; empty or missing means all of them. */
   divisionIds?: string[];
   /** Per-division teacher, when a division is taught by someone else. */

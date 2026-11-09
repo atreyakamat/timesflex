@@ -14,6 +14,7 @@ import {
   type ScheduledSession,
   type TimetableMetrics,
   freeRoomsFor,
+  classGroups,
 } from '@core';
 import { useStore, type GenerateStyle } from '../../src/store';
 import { radius, space, useTheme } from '../../src/theme';
@@ -159,7 +160,10 @@ export default function Timetable() {
   const [picking, setPicking] = useState(false);
   const [variantStyles, setVariantStyles] = useState<GenerateStyle[]>(['balanced', 'compact', 'teacher_days']);
 
-  const options = kind === 'division' ? profile.divisions : kind === 'teacher' ? profile.teachers : kind === 'room' ? profile.rooms : [];
+  const groups = classGroups(profile);
+  const [groupFilter, setGroupFilter] = useState('');
+  const activeGroup = groups.find((g) => g.key === groupFilter) ?? groups[0];
+  const options = kind === 'division' ? (groups.length > 1 ? (activeGroup?.divisions ?? []) : profile.divisions) : kind === 'teacher' ? profile.teachers : kind === 'room' ? profile.rooms : [];
   const targetId = options.find((o) => o.id === target)?.id ?? options[0]?.id ?? '';
   const view = kind === 'all' ? 'all' : `${kind}:${targetId}`;
   const visible = useMemo(() => sessions.filter((s) => matchesView(s, view)), [sessions, view]);
@@ -283,7 +287,16 @@ export default function Timetable() {
             setTarget('');
           }}
         />
-        {kind !== 'all' && (
+        {kind === 'division' && groups.length > 1 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+            {groups.map((group) => (
+              <Pressable key={group.key} accessibilityRole="button" accessibilityState={{ selected: group.key === activeGroup?.key }} onPress={() => { setGroupFilter(group.key); setTarget(''); }} style={{ paddingVertical: 6, paddingHorizontal: 4, borderBottomWidth: 2, borderBottomColor: group.key === activeGroup?.key ? c.accent : 'transparent' }}>
+                <T v="label" color={group.key === activeGroup?.key ? c.text : c.muted}>{group.label}</T>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
+        {kind !== 'all' && !(kind === 'division' && options.length <= 1 && groups.length > 1) && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
             {options.map((option) => (
               <Chip key={option.id} label={option.name} active={option.id === targetId} onPress={() => setTarget(option.id)} />

@@ -322,13 +322,14 @@ export function IconButton({ icon, onPress, label, size = 22, color }: { icon: I
 
 /* ---------- Inputs ---------- */
 
-export function Chip({ label, active, onPress, icon, tone }: { label: string; active?: boolean; onPress?: () => void; icon?: IconName; tone?: 'danger' | 'ok' }) {
+export function Chip({ label, active, onPress, icon, tone, a11yLabel }: { label: string; active?: boolean; onPress?: () => void; icon?: IconName; tone?: 'danger' | 'ok'; a11yLabel?: string }) {
   const { c } = useTheme();
   const bg = active ? (tone === 'danger' ? c.dangerSoft : tone === 'ok' ? c.okSoft : c.primary) : c.glassStrong;
   const fg = active ? (tone === 'danger' ? c.danger : tone === 'ok' ? c.ok : c.onPrimary) : c.text;
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={a11yLabel}
       accessibilityState={{ selected: !!active }}
       onPress={() => {
         tap();

@@ -1,3 +1,4 @@
+import type { InstituteStructure } from './structure';
 import { emptyOperations, splitIntoBatches } from './ops';
 import type {
   DepartmentForm,
@@ -19,6 +20,7 @@ export interface ProfileData {
   rooms: RoomForm[];
   subjects: SubjectForm[];
   operations: OperationsData;
+  structure?: InstituteStructure;
 }
 
 const FIRST = [

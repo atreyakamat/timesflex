@@ -17,7 +17,7 @@ const FEATURES: { icon: IconName; title: string; text: string }[] = [
 
 const STEPS = [
   ['Create your institution', 'A name, your e-mail and a password. One minute.'],
-  ['Add your teachers', 'Who they are and what each can teach. Subjects and rooms are worked out for you.'],
+  ['Add your classes and subjects', 'Tap your years and branches. Add each subject once, and link who teaches it.'],
   ['Pick your favourite version', 'Three clash-free timetables in under a minute. Compare, approve, share.'],
 ];
 
