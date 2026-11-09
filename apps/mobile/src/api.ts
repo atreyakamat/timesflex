@@ -13,6 +13,8 @@ import type {
   NoticeRecipient,
   NoticeRecord,
   TimetableUpdate,
+  EventKind,
+  StudentEvent,
 } from '@core';
 import type { ModelIntent } from '@core';
 import { storage } from './storage';
@@ -136,8 +138,69 @@ const request = async <T>(path: string, options: { method?: string; body?: unkno
   return response.json() as Promise<T>;
 };
 
+export interface InviteRow {
+  id: string;
+  teacherId: string | null;
+  role: string;
+  status: 'joined' | 'waiting' | 'expired';
+}
+export interface MemberRow {
+  accountId: string;
+  name: string;
+  email: string;
+  role: string;
+  teacherId: string | null;
+  owner?: boolean;
+}
+export interface CollegeRow {
+  id: string;
+  name: string;
+  type: string;
+  status: 'active' | 'paused';
+  contact: string | null;
+  adminEmail: string | null;
+  stage: 'invited' | 'setting_up' | 'ready' | 'built' | 'approved' | 'live';
+  counts: { classes: number; teachers: number; subjects: number; students: number; rooms: number; members: number };
+}
+export interface Classroom {
+  name: string;
+  role: 'admin' | 'teacher';
+  teacherId: string | null;
+  institution: Record<string, unknown>;
+  teachers: { id: string; name: string }[];
+  subjects: { id: string; name: string }[];
+  rooms: { id: string; name: string }[];
+  divisions: { id: string; name: string; batches: string[]; size?: number; students: { id: string; rollNo: string; name: string; batch?: string }[] }[];
+  sessions: unknown[];
+}
+
+/** A link someone can tap to accept an invite: this page's address, or the server the app uses. */
+export const joinLink = (code: string) => {
+  const origin = Platform.OS === 'web' ? globalThis.location?.origin ?? '' : apiBase();
+  return `${origin}/join?code=${encodeURIComponent(code)}`;
+};
+
 export const api = {
   base: apiBase,
+  peekInvite: (code: string) => request<{ college: string; teacher: string | null; role: string }>(`/api/auth/invite/${encodeURIComponent(code)}`),
+  async join(body: { code: string; name: string; email: string; password: string }) {
+    const session = await request<AccountSession>('/api/auth/join', { method: 'POST', body });
+    await setToken(session.token ?? null);
+    return session;
+  },
+  classroom: (id: string) => request<Classroom>(`/api/institutions/${id}/classroom`),
+  listEvents: (id: string, filters: { studentId?: string } = {}) => request<StudentEvent[]>(`/api/institutions/${id}/events${filters.studentId ? `?studentId=${encodeURIComponent(filters.studentId)}` : ''}`),
+  createEvent: (id: string, body: { studentId: string; kind: EventKind; date: string; time?: string; slot?: string; minutesLate?: number; note?: string }) => request<StudentEvent>(`/api/institutions/${id}/events`, { method: 'POST', body }),
+  reviewEvent: (eventId: string, body: { status: 'open' | 'reviewed'; outcome?: string }) => request<StudentEvent>(`/api/events/${eventId}`, { method: 'PUT', body }),
+  voidEvent: (eventId: string, reason?: string) => request<StudentEvent>(`/api/events/${eventId}/void`, { method: 'POST', body: { ...(reason ? { reason } : {}) } }),
+  listInvites: (id: string) => request<InviteRow[]>(`/api/institutions/${id}/invites`),
+  createInvite: (id: string, teacherId: string) => request<{ id: string; code: string }>(`/api/institutions/${id}/invites`, { method: 'POST', body: { teacherId } }),
+  listMembers: (id: string) => request<MemberRow[]>(`/api/institutions/${id}/members`),
+  removeMember: (id: string, accountId: string) => request(`/api/institutions/${id}/members/${accountId}`, { method: 'DELETE' }),
+  listColleges: () => request<CollegeRow[]>('/api/platform/colleges'),
+  createCollege: (body: { name: string; type: string; contact?: string }) => request<{ id: string; code: string }>('/api/platform/colleges', { method: 'POST', body }),
+  inviteCollegeAdmin: (id: string) => request<{ code: string }>(`/api/platform/colleges/${id}/invite`, { method: 'POST', body: {} }),
+  setCollegeStatus: (id: string, status: 'active' | 'paused') => request(`/api/platform/colleges/${id}`, { method: 'PUT', body: { status } }),
   async signUp(body: { name: string; email: string; password: string; institutionName: string; institutionType: InstitutionType }) {
     const session = await request<AccountSession>('/api/auth/signup', { method: 'POST', body });
     await setToken(session.token ?? null);

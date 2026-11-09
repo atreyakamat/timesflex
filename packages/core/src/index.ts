@@ -14,3 +14,4 @@ export * from './onboarding';
 export * from './changes';
 export * from './structure';
 export * from './sampleInstitute';
+export * from './discipline';

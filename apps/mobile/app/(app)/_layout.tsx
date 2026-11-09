@@ -10,7 +10,8 @@ const TABS: { name: string; title: string; icon: IconName; wideOnly?: boolean }[
   { name: 'home', title: 'Home', icon: 'home-outline' },
   { name: 'timetable', title: 'Timetable', icon: 'grid-outline' },
   { name: 'today', title: 'Today', icon: 'time-outline', wideOnly: true },
-  { name: 'cover', title: 'Cover', icon: 'swap-horizontal-outline' },
+  { name: 'cover', title: 'Cover', icon: 'swap-horizontal-outline', wideOnly: true },
+  { name: 'students', title: 'Students', icon: 'people-outline' },
   { name: 'updates', title: 'Updates', icon: 'paper-plane-outline' },
   { name: 'more', title: 'More', icon: 'apps-outline' },
 ];
@@ -138,10 +139,11 @@ function TabBar({ state, navigation }: { state: { index: number; routes: { name:
 }
 
 export default function AppLayout() {
-  const { account, ready } = useStore();
+  const { account, ready, role, paused } = useStore();
   const wide = useWide();
   usePathname();
   if (ready && !account) return <Redirect href="/welcome" />;
+  if (role === 'teacher' || paused) return <Redirect href="/" />;
   return (
     <View style={{ flex: 1 }}>
       <Tabs

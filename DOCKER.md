@@ -70,6 +70,17 @@ Teachers must have agreed to receive these messages: Meta requires it. Meta also
 **Groups:** WhatsApp's API can't post into groups people already have. Its Groups API only works with groups it
 creates, capped at 8 people, and needs an Official Business Account. That's why group posts are a one-tap share.
 
+## The central admin
+
+The central admin onboards colleges and follows their progress at `/admin`, seeing counts but never people's
+details. It can only be granted from the server, so no request can claim it:
+
+```bash
+docker compose exec api node src/make-central-admin.js you@example.com
+```
+
+To run invitation-only, set `ALLOW_SIGNUP=false` in `.env` and run `./deploy.sh` again.
+
 ## Someone forgot their password
 
 There's no e-mail reset yet. Run this on the server and pass on the temporary password it prints:

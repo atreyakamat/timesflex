@@ -22,7 +22,10 @@ import {
 } from './auth.js';
 import { DuplicateEmailError } from './db.js';
 import { interpretCommand } from './intent.js';
+import { mountEvents } from './events.js';
+import { mountJoin, mountMembers } from './members.js';
 import { mountNotices, mountWhatsAppWebhook } from './notices.js';
+import { mountPlatform } from './platform.js';
 import { aiStatus } from './llm.js';
 import { parseRequirements } from './parser.js';
 import { SolverRejectedError, solveWithSolver } from './solverClient.js';
@@ -35,7 +38,7 @@ const MAX_INSTITUTIONS = 5;
 const MAX_VERSIONS = 100;
 const MINUTE = 60 * 1000;
 
-const publicAccount = (account) => ({ id: account.id, name: account.name, email: account.email, createdAt: account.createdAt });
+const publicAccount = (account) => ({ id: account.id, name: account.name, email: account.email, createdAt: account.createdAt, platformAdmin: account.platformAdmin === true });
 const publicInstitution = ({ ownerId, ...institution }) => institution;
 
 /**
@@ -85,11 +88,19 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   };
 
   const sessionPayload = async (account, token) => {
-    const [institution] = await store.listInstitutions(account.id);
+    const [owned] = await store.listInstitutions(account.id);
+    const [membership] = owned ? [] : await store.listMemberships(account.id);
+    const institution = owned ?? (membership ? await store.getInstitution(membership.institutionId) : null);
+    const role = owned ? 'admin' : (membership?.role ?? null);
+    const brief = institution && { id: institution.id, name: institution.name, type: institution.type, status: institution.status ?? 'active' };
+    // Only someone running the college gets its data here. Teachers load what they need separately.
+    const usable = institution && role === 'admin' && (institution.status ?? 'active') === 'active';
     return {
       ...(token && { token }),
       account: publicAccount(account),
-      institution: institution ? publicInstitution(institution) : null,
+      role,
+      ...(membership?.teacherId ? { teacherId: membership.teacherId } : {}),
+      institution: usable ? publicInstitution(institution) : brief,
     };
   };
 
@@ -103,10 +114,18 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
     next();
   });
 
-  /** The institution, if it exists and belongs to the signed-in account. */
-  const ownedInstitution = async (request, id) => {
+  /** The institution and this account's part in it. A paused college is closed to everyone in it. */
+  const memberAccess = async (request, id) => {
     const institution = await store.getInstitution(id);
-    return institution && institution.ownerId === request.account.id ? institution : null;
+    if (!institution || (institution.status ?? 'active') !== 'active') return null;
+    if (institution.ownerId === request.account.id) return { institution, role: 'admin', teacherId: null };
+    const membership = await store.getMembership(request.account.id, institution.id);
+    return membership ? { institution, role: membership.role, teacherId: membership.teacherId ?? null } : null;
+  };
+  /** The institution, if the signed-in account runs it. Teachers don't reach these routes. */
+  const ownedInstitution = async (request, id) => {
+    const access = await memberAccess(request, id);
+    return access?.role === 'admin' ? access.institution : null;
   };
   const ownedTimetable = async (request, id) => {
     const timetable = await store.getTimetable(id);
@@ -114,7 +133,7 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   };
 
   app.get('/health', (request, response) => {
-    response.json({ service: 'timesflex-api', status: 'ok' });
+    response.json({ service: 'timesflex-api', status: 'ok', signup: process.env.ALLOW_SIGNUP !== 'false' });
   });
 
   /* ---------- Accounts ---------- */
@@ -134,6 +153,7 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   const tooMany = (response) => fail(response, 429, 'Too many attempts. Try again in a little while.');
 
   app.post('/api/auth/signup', route(async (request, response) => {
+    if (process.env.ALLOW_SIGNUP === 'false') return fail(response, 403, 'New colleges are set up by invitation. Contact whoever runs this service.');
     const { name, email, password, institutionName, institutionType = 'college' } = request.body ?? {};
     const cleanName = cleanText(name, LIMITS.name);
     const cleanInstitution = cleanText(institutionName, LIMITS.institutionName);
@@ -188,6 +208,8 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
     const token = await startSession(account);
     response.json(await sessionPayload(account, token));
   }));
+
+  mountJoin(app, { store, route, fail, sessionPayload, startSession, signupLimiter, loginLimiter });
 
   app.get('/api/auth/me', requireAuth, route(async (request, response) => {
     response.json(await sessionPayload(request.account));
@@ -420,6 +442,9 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   }));
 
   mountNotices(app, { store, route, fail, ownedInstitution, limits, ...(send && { send }) });
+  mountMembers(app, { store, route, fail, ownedInstitution });
+  mountEvents(app, { store, route, fail, memberAccess, ownedInstitution, limits });
+  mountPlatform(app, { store, route, fail });
 
   app.use('/api', (request, response) => notFound(response, 'Page'));
 

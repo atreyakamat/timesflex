@@ -98,6 +98,17 @@ for (const [name, method, url, body] of [
 }
 const stranger = await call('POST', `${inst}/notices`, { token: alice.token, body: { ...noticeBody, recipients: [{ teacherId: 'someone-else', text: 'spam', summary: 'spam' }] } });
 check('messages only go to the college’s own teachers', stranger.status === 400, stranger.status);
+const otherEvent = await call('POST', `${inst}/events`, { token: mallory.token, body: { studentId: 's', kind: 'bunked', date: new Date().toISOString().slice(0, 10) } });
+check('cannot flag a student in another college', otherEvent.status === 404, otherEvent.status);
+const otherRoom = await call('GET', `${inst}/classroom`, { token: mallory.token });
+check('cannot read another college’s class lists', otherRoom.status === 404, otherRoom.status);
+const panel = await call('GET', '/api/platform/colleges', { token: mallory.token });
+check('the central admin panel is hidden from ordinary accounts', panel.status === 404, panel.status);
+const selfPromote = await call('POST', '/api/auth/signup', { body: { name: 'x', email: `promo-${stamp}@example.test`, password: 'password-long-enough', institutionName: 'x', platformAdmin: true, role: 'admin' } });
+check('nobody can sign up as a central admin', selfPromote.json?.account?.platformAdmin === false, selfPromote.status);
+if (selfPromote.status === 201) made.push({ token: selfPromote.json.token, password: 'password-long-enough' });
+const fakeInvite = await call('POST', '/api/auth/join', { body: { code: 'A'.repeat(43), name: 'x', email: `fake-${stamp}@example.test`, password: 'password-long-enough' } });
+check('a made-up invite gets you nowhere', fakeInvite.status === 410, fakeInvite.status);
 const forgedHook = await call('POST', '/api/webhooks/whatsapp', { raw: JSON.stringify({ entry: [] }), headers: { 'X-Hub-Signature-256': 'sha256=00' } });
 check('a forged delivery update is refused', forgedHook.status === 401, forgedHook.status);
 const unsignedHook = await call('POST', '/api/webhooks/whatsapp', { raw: '{}' });

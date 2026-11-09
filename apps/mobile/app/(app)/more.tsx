@@ -72,6 +72,8 @@ export default function More() {
     ['Teacher profiles', 'Numbers, days off and limits', 'person-outline', '/setup/teachers'],
     ['Rooms & labs', `${profile.rooms.length} rooms`, 'business-outline', '/setup/rooms'],
     ['Class lists', 'Students, batches and class teachers', 'list-outline', '/setup/classes'],
+    ['Teacher access', 'Invite teachers to sign in', 'key-outline', '/access'],
+    ['Cover', 'Substitutions when someone is away', 'swap-horizontal-outline', '/cover'],
   ];
 
   return (
@@ -86,6 +88,19 @@ export default function More() {
         </Row>
         <T v="small">{profile.institution.name}</T>
       </Card>
+
+      {account?.platformAdmin ? (
+        <Card onPress={() => router.push('/admin')} style={{ marginTop: space.md, paddingVertical: space.md }}>
+          <Row gap={12}>
+            <Icon name="business" size={22} color={c.accent} />
+            <View style={{ flex: 1 }}>
+              <T v="h3">Central admin</T>
+              <T v="small">All colleges, onboarding and progress.</T>
+            </View>
+            <Icon name="chevron-forward" size={20} color={c.muted} />
+          </Row>
+        </Card>
+      ) : null}
 
       <SectionTitle title="Your college" />
       <View style={{ gap: space.sm }}>

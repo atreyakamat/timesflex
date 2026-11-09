@@ -43,6 +43,7 @@ services:
       DATABASE_URL: postgres://timeflex:${POSTGRES_PASSWORD:?Run ./deploy.sh or set POSTGRES_PASSWORD in .env}@db:5432/timeflex
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       ALLOW_DEMO: ${ALLOW_DEMO:-true}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
       SOLVER_URL: http://solver:8000/solve
       TRUST_PROXY: ${TRUST_PROXY:-1}
       AI_PROVIDER: ${AI_PROVIDER:-ollama}

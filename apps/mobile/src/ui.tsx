@@ -63,7 +63,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const shown = useRef(new Animated.Value(0)).current;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hide = useCallback(() => {
-    Animated.timing(shown, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => setToast(null));
+    // Interrupted means a new message took over, and it must not be wiped.
+    Animated.timing(shown, { toValue: 0, duration: 180, useNativeDriver: true }).start(({ finished }) => {
+      if (finished) setToast(null);
+    });
   }, [shown]);
   const show = useCallback(
     (text: string, action?: ToastAction) => {

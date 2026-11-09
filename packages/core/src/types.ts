@@ -212,6 +212,7 @@ export interface Account {
   name: string;
   email: string;
   createdAt?: string;
+  platformAdmin?: boolean;
 }
 
 /** Returned by sign-up, sign-in and /me. The token is only present on sign-up and sign-in. */
@@ -219,6 +220,8 @@ export interface AccountSession {
   token?: string;
   account: Account;
   institution: InstitutionRecord | null;
+  role?: 'admin' | 'teacher' | null;
+  teacherId?: string;
 }
 
 export interface InstitutionRecord {

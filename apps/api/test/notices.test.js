@@ -6,11 +6,11 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createApp } from '../src/app.js';
-import { createFileStore } from '../src/db.js';
+import { createFileStore, createPgStore } from '../src/db.js';
 import { toWhatsAppNumber } from '../src/whatsapp.js';
 
 const dir = mkdtempSync(path.join(os.tmpdir(), 'timesflex-notices-'));
-const store = await createFileStore(path.join(dir, 'data.json'));
+const store = process.env.TEST_DATABASE_URL ? await createPgStore(process.env.TEST_DATABASE_URL) : await createFileStore(path.join(dir, 'data.json'));
 const sent = [];
 let failNext = false;
 let nextMessage = 0;
@@ -30,8 +30,9 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const SECRET = 'test-app-secret';
 const saved = { ...process.env };
 
-test.after(() => {
+test.after(async () => {
   server.close();
+  await store.close?.();
   process.env = saved;
   rmSync(dir, { recursive: true, force: true });
 });

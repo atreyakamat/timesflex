@@ -86,6 +86,11 @@ type SaveState = 'saved' | 'saving' | 'error';
 interface Store {
   ready: boolean;
   account: Account | null;
+  role: 'admin' | 'teacher' | null;
+  teacherId: string | null;
+  /** The central admin has paused this college. */
+  paused: boolean;
+  joinCollege: (body: { code: string; name: string; email: string; password: string }) => Promise<void>;
   institutionId: string | null;
   profile: Profile;
   slots: string[];
@@ -148,6 +153,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [account, setAccount] = useState<Account | null>(null);
+  const [role, setRole] = useState<'admin' | 'teacher' | null>(null);
+  const [teacherId, setTeacherId] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const readOnly = useRef(false);
   const [institutionId, setInstitutionId] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile>(blankProfile());
   const [versions, setVersions] = useState<TimetableRecord[]>([]);
@@ -170,6 +179,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const reset = useCallback(() => {
     setAccount(null);
+    setRole(null);
+    setTeacherId(null);
+    setPaused(false);
+    readOnly.current = false;
     setInstitutionId(null);
     setProfile(blankProfile());
     setVersions([]);
@@ -181,9 +194,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const open = useCallback(async (session: AccountSession, fresh: boolean) => {
     setAccount(session.account);
-    setIsNew(fresh);
+    setRole(session.role ?? null);
+    setTeacherId(session.teacherId ?? null);
+    const isPaused = (session.institution as { status?: string } | null)?.status === 'paused';
+    setPaused(isPaused);
+    readOnly.current = session.role === 'teacher';
+    setIsNew(fresh && session.role !== 'teacher');
     if (!session.institution) return;
     setInstitutionId(session.institution.id);
+    if (isPaused) return;
+    if (session.role === 'teacher') {
+      // Teachers get a plain view: names, class lists and the approved timetable.
+      const room = await api.classroom(session.institution.id);
+      const base = blankProfile(room.name);
+      setProfile({
+        ...base,
+        institution: { ...base.institution, ...(room.institution as object), name: room.name } as Profile['institution'],
+        divisions: room.divisions as unknown as Profile['divisions'],
+        teachers: room.teachers as unknown as Profile['teachers'],
+        rooms: room.rooms as unknown as Profile['rooms'],
+        subjects: room.subjects as unknown as Profile['subjects'],
+      });
+      const live = { id: 'live', label: 'Timetable', status: 'approved', generatedSessions: room.sessions } as unknown as TimetableRecord;
+      setVersions([live]);
+      setCurrentId('live');
+      setSessions(live.generatedSessions);
+      return;
+    }
     setProfile(profileFrom(session.institution));
     profileDirty.current = false;
     opsDirty.current = false;
@@ -311,6 +348,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const drift = useMemo(() => timetableDrift(profile, liveSessions), [profile, liveSessions]);
 
   const update = useCallback((change: (profile: Profile) => Profile) => {
+    if (readOnly.current) return;
     profileDirty.current = true;
     setProfile((p) => change(p));
   }, []);
@@ -436,6 +474,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value: Store = {
     ready,
     account,
+    role,
+    teacherId,
+    paused,
+    joinCollege: async (body) => open(await api.join(body), true),
     institutionId,
     profile,
     slots,

@@ -1,10 +1,11 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import {
   absentTeacherIds,
   currentSlotIndex,
   divisionSize,
+  eventStats,
   isRunAction,
   nextSlotIndex,
   sessionsOnDay,
@@ -15,6 +16,7 @@ import {
   weekdayOf,
   type Insight,
 } from '@core';
+import { api } from '../../src/api';
 import { useStore } from '../../src/store';
 import { radius, space, useTheme } from '../../src/theme';
 import { Button, Card, Gradient, Icon, Pill, Row, Screen, SectionTitle, T, useWide, type IconName } from '../../src/ui';
@@ -110,6 +112,37 @@ function InsightCard({ insight }: { insight: Insight }) {
   );
 }
 
+/** Students at a glance, once there are class lists. */
+function StudentsToday() {
+  const { institutionId, profile } = useStore();
+  const { c } = useTheme();
+  const [stats, setStats] = useState<ReturnType<typeof eventStats> | null>(null);
+  const load = useCallback(() => {
+    if (!institutionId) return;
+    api.listEvents(institutionId).then((list) => setStats(eventStats(list, toDateKey(new Date())))).catch(() => {});
+  }, [institutionId]);
+  useFocusEffect(load);
+  if (!profile.divisions.some((d) => d.students?.length)) return null;
+  return (
+    <>
+      <SectionTitle title="Students today" action={<Button label="Open students" kind="ghost" size="sm" onPress={() => router.push('/students')} />} />
+      <Card onPress={() => router.push('/students')} tone={stats?.openFlags ? 'warn' : undefined}>
+        <Row gap={space.lg} wrap>
+          <T>
+            <T v="h3">{String(stats?.lateToday ?? 0)}</T> late
+          </T>
+          <T>
+            <T v="h3">{String(stats?.flagsToday ?? 0)}</T> flagged
+          </T>
+          <T color={stats?.openFlags ? c.warn : undefined}>
+            <T v="h3">{String(stats?.openFlags ?? 0)}</T> waiting for review
+          </T>
+        </Row>
+      </Card>
+    </>
+  );
+}
+
 export default function Home() {
   const store = useStore();
   const { profile, account, liveSessions, slots, names, unplaced } = store;
@@ -197,6 +230,8 @@ export default function Home() {
           </View>
         </>
       )}
+
+      <StudentsToday />
 
       <SectionTitle title="What I noticed" action={insights.some((i) => i.level === 'blocker') ? <Pill label={`${insights.filter((i) => i.level === 'blocker').length} to fix`} tone="danger" /> : undefined} />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
