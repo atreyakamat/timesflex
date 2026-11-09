@@ -127,6 +127,33 @@ services:
       ollama:
         condition: service_healthy
 
+  # A database backup every day, kept for 14 days, in the "backups" volume. See DOCKER.md to restore.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Run ./deploy.sh or set POSTGRES_PASSWORD in .env}
+    volumes:
+      - backups:/backups
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          name=/backups/timeflex-$$(date +%F)
+          if pg_dump -h db -U timeflex -f $$name.tmp timeflex && gzip -f $$name.tmp; then
+            mv $$name.tmp.gz $$name.sql.gz
+            echo "Backed up to $$name.sql.gz"
+          else
+            echo "Backup failed" >&2
+          fi
+          find /backups -name '*.sql.gz' -mtime +14 -delete
+          sleep 86400
+        done
+    depends_on:
+      db:
+        condition: service_healthy
+
   # Optional automatic HTTPS for hosting: docker compose --profile https up -d
   https:
     image: caddy:2-alpine
@@ -142,6 +169,7 @@ services:
       - web
 
 volumes:
+  backups:
   db:
   ollama:
   caddy:

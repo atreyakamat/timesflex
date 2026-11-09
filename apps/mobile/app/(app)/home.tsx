@@ -29,7 +29,7 @@ const LEVEL: Record<Insight['level'], { icon: IconName; tone: 'danger' | 'warn' 
 /** The single most useful thing to do now. */
 function NextStep() {
   const store = useStore();
-  const { profile, liveSessions, liveVersion, pendingUpdate, sessionsNeedingRoom } = store;
+  const { profile, liveSessions, liveVersion, pendingUpdate, sessionsNeedingRoom, drift } = store;
   const { c } = useTheme();
   const today = toDateKey(new Date());
   const needCover = uncoveredPeriods(profile.operations, today, liveSessions, store.slots).length;
@@ -37,7 +37,9 @@ function NextStep() {
     ? { icon: 'list-outline', title: 'Finish setting up', text: 'Add your teachers and classes to get your first timetable.', label: 'Continue setup', href: '/onboarding' }
     : !liveSessions.length
       ? { icon: 'sparkles-outline', title: 'Build your timetable', text: 'Three different versions to compare, usually in under a minute.', label: 'Go to timetable', href: '/timetable' }
-      : sessionsNeedingRoom.length
+      : drift.changed
+        ? { icon: 'sync-outline', title: 'Your setup has changed', text: 'Update the timetable to match. Everything else stays where it is.', label: 'See what changed', href: '/timetable' }
+        : sessionsNeedingRoom.length
         ? { icon: 'business-outline', title: `${sessionsNeedingRoom.length} class${sessionsNeedingRoom.length === 1 ? ' has' : 'es have'} no room`, text: 'A room was deleted. It takes one tap to fix.', label: 'Fix it', href: '/timetable' }
         : needCover
           ? { icon: 'swap-horizontal-outline', title: `${needCover} period${needCover === 1 ? '' : 's'} need cover today`, text: 'Fair substitutes can be picked for you.', label: 'Arrange cover', href: '/cover' }
@@ -131,6 +133,7 @@ export default function Home() {
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const first = account?.name.replace(/^(prof|dr|mr|mrs|ms)\.?\s+/i, '').split(' ')[0] ?? '';
   const students = profile.divisions.reduce((sum, d) => sum + divisionSize(d), 0);
+  const surname = (index: number) => profile.teachers[index % Math.max(1, profile.teachers.length)]?.name.split(/\s+/).pop() ?? 'Mehta';
 
   return (
     <Screen bottomSpace={wide ? 0 : 110}>
@@ -152,7 +155,7 @@ export default function Home() {
             <View style={{ flex: 1 }}>
               <T v="h3">Ask or tell me anything</T>
               <T v="small" numberOfLines={1}>
-                “Mehta is away tomorrow” · “make 3 variations” · “max 3 a day for Rao”
+                “{surname(0)} is away tomorrow” · “make 3 variations” · “max 3 a day for {surname(1)}”
               </T>
             </View>
             <Icon name="arrow-forward-circle" size={28} color={c.text} />
@@ -202,7 +205,7 @@ export default function Home() {
         ))}
       </View>
 
-      <SectionTitle title="Your department" />
+      <SectionTitle title="Your college" />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
         {(
           [
@@ -211,7 +214,6 @@ export default function Home() {
             [profile.teachers.length, 'Teachers', 'person-outline', '/setup/teachers'],
             [profile.rooms.length, 'Rooms', 'business-outline', '/setup/rooms'],
             [profile.subjects.length, 'Subjects', 'book-outline', '/setup/subjects'],
-            [liveSessions.length, 'Sessions / week', 'grid-outline', '/timetable'],
           ] as [number, string, IconName, string][]
         ).map(([value, label, icon, href]) => (
           <Card key={label} style={{ flexGrow: 1, flexBasis: wide ? 150 : 140, gap: 4 }} onPress={() => router.push(href as never)}>

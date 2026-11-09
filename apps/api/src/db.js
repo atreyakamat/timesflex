@@ -253,6 +253,9 @@ export const createPgStore = async (connectionString) => {
       const result = await pool.query('SELECT * FROM message_links WHERE message_id = $1', [messageId]);
       return result.rows[0] ? { noticeId: result.rows[0].notice_id, teacherId: result.rows[0].teacher_id } : null;
     },
+    async deleteTimetables(institutionId) {
+      await pool.query('DELETE FROM timetables WHERE institution_id = $1', [institutionId]);
+    },
     async pruneTimetables(institutionId, keep) {
       await pool.query(
         `DELETE FROM timetables WHERE id IN (
@@ -449,6 +452,10 @@ export const createFileStore = async (filePath) => {
     },
     async findMessageLink(messageId) {
       return clone(state.messageLinks.find((item) => item.messageId === messageId));
+    },
+    async deleteTimetables(institutionId) {
+      state.timetables = state.timetables.filter((item) => item.institutionId !== institutionId);
+      await persist();
     },
     async pruneTimetables(institutionId, keep) {
       const stale = new Set(

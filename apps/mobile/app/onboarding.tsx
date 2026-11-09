@@ -15,6 +15,8 @@ import {
   linkDivisionTeacher,
   linkTeacher,
   linkTeachersFromList,
+  renameInStructure,
+  structureImpact,
   seedRooms,
   setupEstimate,
   setupInsights,
@@ -33,7 +35,7 @@ import {
 } from '@core';
 import { useStore, type Profile } from '../src/store';
 import { radius, space, useTheme } from '../src/theme';
-import { Background, Button, Card, Chip, Field, Icon, IconButton, Progress, Row, Segmented, Stepper, T } from '../src/ui';
+import { Background, Button, Card, Chip, Field, Icon, IconButton, Progress, Row, Segmented, Sheet, Stepper, T, useToast } from '../src/ui';
 
 /**
  * First-run setup, in the order a college thinks. The institution exists from sign-up. Tap the
@@ -43,11 +45,11 @@ import { Background, Button, Card, Chip, Field, Icon, IconButton, Progress, Row,
 
 /** /onboarding?demo=1 prepares a full sample college with no questions; otherwise the steps. */
 export default function Onboarding() {
-  const { demo } = useLocalSearchParams<{ demo?: string }>();
-  return demo ? <DemoSetup /> : <Wizard />;
+  const { demo, step } = useLocalSearchParams<{ demo?: string; step?: string }>();
+  return demo ? <DemoSetup /> : <Wizard start={ORDER.includes(step as Step) ? (step as Step) : undefined} />;
 }
 
-const DEMO_STEPS = ['Creating a sample engineering department', 'Adding 7 teachers, 116 students, 6 rooms and 8 subjects', 'Building 3 clash-free timetable versions', 'Ready'];
+const DEMO_STEPS = ['Creating a sample engineering college', 'Adding 7 classes, 12 teachers, 11 rooms and 23 subjects', 'Building 3 clash-free timetable versions', 'Ready'];
 
 function DemoSetup() {
   const store = useStore();
@@ -87,7 +89,7 @@ function DemoSetup() {
         <View style={{ gap: 6 }}>
           <T v="eyebrow">Live demo</T>
           <T v="h1">Preparing your demo college</T>
-          <T>About fifteen seconds. Everything you see is real: the timetable is solved live.</T>
+          <T>About half a minute. Everything you see is real: the timetable is solved live.</T>
         </View>
         <View style={{ gap: space.md }}>
           {DEMO_STEPS.map((label, index) => {
@@ -139,10 +141,10 @@ const firstUnfinished = (profile: Profile): Step => {
   return 'review';
 };
 
-function Wizard() {
+function Wizard({ start }: { start?: Step }) {
   const store = useStore();
   const { profile, update } = store;
-  const [step, setStep] = useState<Step>(() => firstUnfinished(profile));
+  const [step, setStep] = useState<Step>(() => start ?? firstUnfinished(profile));
 
   const goTo = (next: Step) => {
     // Rooms are worked out from the classes and subjects, ready to change.
@@ -173,7 +175,7 @@ function Wizard() {
             <T v="label">{step === 'review' ? 'Last check' : `Step ${index + 1} of ${STEPS.length} · about ${plural(minutes, 'minute')} left`}</T>
             <Progress value={step === 'review' ? 1 : index / STEPS.length} />
           </View>
-          <Button label="Finish later" kind="ghost" size="sm" onPress={() => finish('/home')} />
+          <Button label={store.liveSessions.length || !store.isNew ? 'Done' : 'Finish later'} kind="ghost" size="sm" onPress={() => finish('/home')} />
         </Row>
 
         {step === 'classes' && <ClassesStep key={step} onNext={forward} onSample={useSample} />}
@@ -283,10 +285,43 @@ function Picker({ title, hint, defaults, chosen, onChange, placeholder }: { titl
   );
 }
 
+/** Rename a year or branch: every class and subject stays attached. */
+function RenameRow({ kind, name }: { kind: 'year' | 'branch'; name: string }) {
+  const { profile, update } = useStore();
+  const [value, setValue] = useState(name);
+  const list = kind === 'year' ? profile.structure?.years : profile.structure?.branches;
+  const clash = list?.some((item) => item !== name && item.toLowerCase() === value.trim().toLowerCase());
+  return (
+    <Row gap={8} align="flex-end">
+      <View style={{ flex: 1 }}>
+        <Field label={name} value={value} onChangeText={setValue} hint={clash ? 'That name is already used.' : undefined} />
+      </View>
+      <Button label="Save" size="sm" disabled={!value.trim() || value.trim() === name || !!clash} onPress={() => update((p) => renameInStructure(p, kind, name, value))} />
+    </Row>
+  );
+}
+
 function ClassesStep({ onNext, onSample }: { onNext: () => void; onSample: () => void }) {
   const { profile, update } = useStore();
+  const toast = useToast();
   const structure: InstituteStructure = profile.structure ?? emptyStructure();
-  const set = (patch: Partial<InstituteStructure>) => update((p) => applyStructure(p, { ...(p.structure ?? emptyStructure()), ...patch }));
+  const [pending, setPending] = useState<InstituteStructure | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const impact = pending ? structureImpact(profile, pending) : null;
+  /** Anything that would remove classes with work attached gets confirmed first. */
+  const set = (patch: Partial<InstituteStructure>) => {
+    const next = { ...structure, ...patch };
+    const { subjects } = structureImpact(profile, next);
+    if (subjects.length) setPending(next);
+    else update((p) => applyStructure(p, next));
+  };
+  const confirm = () => {
+    if (!pending) return;
+    const before = profile;
+    update((p) => applyStructure(p, pending));
+    setPending(null);
+    toast.show('Removed.', { label: 'Undo', onPress: () => update(() => before) });
+  };
   const boxes = structureBoxes(structure);
   const totals = structureTotals(structure);
   const handMade = profile.divisions.filter((d) => !d.group);
@@ -303,6 +338,27 @@ function ClassesStep({ onNext, onSample }: { onNext: () => void; onSample: () =>
       }
     >
       <Heading title={`Which classes at ${profile.institution.name || 'your institute'}?`} help="Tap your years and branches. Starting with just your own branch is fine; you can add the rest later." />
+      <Sheet visible={!!pending} onClose={() => setPending(null)} title="Remove these?">
+        {impact ? (
+          <>
+            <T>
+              This removes {plural(impact.classes.length, 'class', 'classes')} ({impact.classes.map((d) => d.name).join(', ')}) and {plural(impact.subjects.length, 'subject')} with who teaches them ({impact.subjects.slice(0, 6).map((s) => s.name).join(', ')}{impact.subjects.length > 6 ? ', …' : ''}).
+            </T>
+            <Button label="Yes, remove them" kind="danger" onPress={confirm} />
+            <Button label="Keep them" kind="ghost" onPress={() => setPending(null)} />
+          </>
+        ) : null}
+      </Sheet>
+      <Sheet visible={renaming} onClose={() => setRenaming(false)} title="Rename years and branches">
+        <T v="small">Every class and subject stays attached.</T>
+        {structure.years.map((year) => (
+          <RenameRow key={`y${year}`} kind="year" name={year} />
+        ))}
+        {structure.branches.map((branch) => (
+          <RenameRow key={`b${branch}`} kind="branch" name={branch} />
+        ))}
+        <Button label="Done" kind="secondary" onPress={() => setRenaming(false)} />
+      </Sheet>
       <Card style={{ gap: space.lg }}>
         <Picker title="Years" hint="Add your own if you use other names." defaults={DEFAULT_YEARS} chosen={structure.years} placeholder="e.g. Final Year" onChange={(years) => set({ years })} />
         <Picker title="Branches" hint="Leave these empty if you don’t have branches." defaults={DEFAULT_BRANCHES} chosen={structure.branches} placeholder="e.g. Civil" onChange={(branches) => set({ branches })} />
@@ -310,7 +366,12 @@ function ClassesStep({ onNext, onSample }: { onNext: () => void; onSample: () =>
 
       {boxes.length ? (
         <Card style={{ gap: space.md }}>
-          <T v="h3">How many divisions and students?</T>
+          <Row style={{ justifyContent: 'space-between' }}>
+            <T v="h3" style={{ flex: 1 }}>
+              How many divisions and students?
+            </T>
+            <Button label="Rename" kind="ghost" size="sm" onPress={() => setRenaming(true)} />
+          </Row>
           <T v="small">Student counts are for room sizes and lab batches. Names can come later.</T>
           {structure.years.map((year) => {
             const rows = boxes.filter((box) => box.year === year);
@@ -390,6 +451,7 @@ function SubjectRow({ subject, onChange, onRemove }: { subject: SubjectForm; onC
 function SubjectsStep({ onNext }: { onNext: () => void }) {
   const { profile, update } = useStore();
   const { c } = useTheme();
+  const toast = useToast();
   const groups = classGroups(profile);
   const [key, setKey] = useState(() => (groups.find((g) => !subjectsInGroup(profile, g.key).length) ?? groups[0])?.key ?? '');
   const group = groups.find((g) => g.key === key) ?? groups[0];
@@ -426,7 +488,16 @@ function SubjectsStep({ onNext }: { onNext: () => void }) {
             <View>
               <T v="label">{plural(subjects.length, 'subject')}</T>
               {subjects.map((subject) => (
-                <SubjectRow key={subject.id} subject={subject} onChange={(patch) => change(subject.id, patch)} onRemove={() => update((p) => ({ ...p, subjects: p.subjects.filter((s) => s.id !== subject.id) }))} />
+                <SubjectRow
+                  key={subject.id}
+                  subject={subject}
+                  onChange={(patch) => change(subject.id, patch)}
+                  onRemove={() => {
+                    const before = profile;
+                    update((p) => ({ ...p, subjects: p.subjects.filter((s) => s.id !== subject.id) }));
+                    toast.show(`${subject.name} removed.`, { label: 'Undo', onPress: () => update(() => before) });
+                  }}
+                />
               ))}
             </View>
           ) : null}
@@ -710,6 +781,15 @@ function Review({ onFinish, onEdit }: { onFinish: (to: '/home' | '/timetable') =
   const estimate = setupEstimate(profile);
   const [result, setResult] = useState('');
   const [error, setError] = useState('');
+  const adding = store.liveSessions.length > 0 && store.drift.changed;
+  const addToTimetable = async () => {
+    setError('');
+    try {
+      setResult(await store.fillTimetable());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update the timetable.');
+    }
+  };
   const build = async () => {
     setError('');
     try {
@@ -723,7 +803,7 @@ function Review({ onFinish, onEdit }: { onFinish: (to: '/home' | '/timetable') =
   if (result) {
     return (
       <Page footer={<Button label="See my timetable" icon="arrow-forward" size="lg" full onPress={() => onFinish('/timetable')} />}>
-        <Heading title="Your timetables are ready" help={`${result} Pick the one you like best, and TimeFlex learns from your choice.`} />
+        <Heading title={adding || /updated|Added/.test(result) ? 'Your timetable is updated' : 'Your timetables are ready'} help={/updated|Added/.test(result) ? result : `${result} Pick the one you like best, and TimeFlex learns from your choice.`} />
       </Page>
     );
   }
@@ -732,10 +812,22 @@ function Review({ onFinish, onEdit }: { onFinish: (to: '/home' | '/timetable') =
       footer={
         <>
           {error ? <T color={c.danger}>{error}</T> : null}
-          <Button label={store.busy ?? 'Build 3 versions'} icon="sparkles" size="lg" full onPress={build} disabled={blockers.length > 0} loading={!!store.busy} />
-          <T v="small" style={{ textAlign: 'center' }}>
-            Usually takes under {Math.ceil(estimate.buildSeconds(3) / 10) * 10} seconds.
-          </T>
+          {adding ? (
+            <>
+              <Button label={store.busy ?? 'Add to my timetable'} icon="sync" size="lg" full onPress={addToTimetable} disabled={blockers.length > 0} loading={!!store.busy} />
+              <T v="small" style={{ textAlign: 'center' }}>
+                Classes already placed stay exactly where they are.
+              </T>
+              <Button label="Build 3 new versions instead (classes may move)" kind="ghost" onPress={build} disabled={blockers.length > 0 || !!store.busy} />
+            </>
+          ) : (
+            <>
+              <Button label={store.busy ?? (store.liveSessions.length ? 'Build 3 new versions' : 'Build 3 versions')} icon="sparkles" size="lg" full onPress={build} disabled={blockers.length > 0} loading={!!store.busy} />
+              <T v="small" style={{ textAlign: 'center' }}>
+                Usually takes under {Math.ceil(estimate.buildSeconds(3) / 10) * 10} seconds.
+              </T>
+            </>
+          )}
           <Button label="I’ll look around first" kind="ghost" onPress={() => onFinish('/home')} />
         </>
       }

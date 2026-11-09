@@ -60,7 +60,7 @@ function SessionTile({ session, view, onPress, compact }: { session: ScheduledSe
         {session.locked && <Icon name="lock-closed" size={11} color={c.text2} />}
         {clash && <Icon name="alert-circle" size={12} color={c.danger} />}
         <T v="label" numberOfLines={compact ? 2 : 1} style={{ color: c.text, flex: 1, fontSize: compact ? 12 : 14 }}>
-          {names[session.subject_id]}
+          {names[session.subject_id] ?? 'Removed subject'}
         </T>
       </Row>
       <T v="small" numberOfLines={compact ? 2 : 1} style={{ fontSize: compact ? 11 : 13 }}>
@@ -68,6 +68,43 @@ function SessionTile({ session, view, onPress, compact }: { session: ScheduledSe
         {session.duration_slots > 1 && !compact ? ` · ${session.duration_slots} periods` : ''}
       </T>
     </Pressable>
+  );
+}
+
+/** The setup has changed since this was built. Brings it in line without moving anything else. */
+function SetupChanged() {
+  const store = useStore();
+  const toast = useToast();
+  const [working, setWorking] = useState(false);
+  const { changed, missing, stale, reassigned } = store.drift;
+  if (!changed || !store.liveSessions.length) return null;
+  const parts = [
+    missing ? `${missing} new class${missing === 1 ? '' : 'es'} to add` : '',
+    stale.length ? `${stale.length} no longer needed` : '',
+    reassigned ? `${reassigned} with a new teacher` : '',
+  ].filter(Boolean);
+  return (
+    <Card tone="accent" style={{ marginTop: space.md, gap: space.sm }}>
+      <T v="h3">Your setup has changed</T>
+      <T v="small">{parts.join(', ')}. Everything else stays exactly where it is.</T>
+      <Button
+        label={store.busy ?? 'Update the timetable'}
+        icon="sync"
+        size="sm"
+        loading={working}
+        style={{ alignSelf: 'flex-start' }}
+        onPress={async () => {
+          setWorking(true);
+          try {
+            toast.show(await store.fillTimetable());
+          } catch (e) {
+            toast.show(e instanceof Error ? e.message : 'Could not update the timetable.');
+          } finally {
+            setWorking(false);
+          }
+        }}
+      />
+    </Card>
   );
 }
 
@@ -109,7 +146,7 @@ function Compare({ onChoose }: { onChoose: (id: string, shown: string[]) => void
     ['teacherGaps', 'Teacher waiting gaps'],
     ['classGaps', 'Class free gaps'],
     ['lastPeriod', 'Classes in last period'],
-    ['averageFinish', 'Day ends (period)'],
+    ['averageFinish', 'Typical last period'],
   ];
   return (
     <>
@@ -216,9 +253,10 @@ export default function Timetable() {
       <Row style={{ justifyContent: 'space-between', alignItems: 'flex-end' }} wrap gap={12}>
         <View style={{ gap: 4 }}>
           <T v="eyebrow">Timetable</T>
-          <T v="h1">{current?.label.split('·')[1]?.trim() ?? 'Your week'}</T>
-          <Row gap={8}>
-            <Pill label={current?.status === 'approved' ? 'Approved' : 'Draft'} tone={current?.status === 'approved' ? 'ok' : 'neutral'} />
+          <T v="h1">{profile.institution.name ? 'Your timetable' : 'Your week'}</T>
+          <Row gap={8} wrap>
+            <T v="small">{current?.label.split('·')[1]?.trim()}</T>
+            <Pill label={current?.status === 'approved' ? 'Approved' : 'Draft'} tone={current?.status === 'approved' ? 'ok' : 'warn'} />
             <Pill label={conflicts.length ? `${conflicts.length} clash${conflicts.length === 1 ? '' : 'es'}` : 'No clashes'} tone={conflicts.length ? 'danger' : 'ok'} />
             {unplaced.length ? <Pill label={`${unplaced.length} not placed`} tone="warn" /> : null}
           </Row>
@@ -254,6 +292,7 @@ export default function Timetable() {
         </Card>
       ) : null}
 
+      <SetupChanged />
       <RoomRepair />
 
       {insights.length > 0 && (

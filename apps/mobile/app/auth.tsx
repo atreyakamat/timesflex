@@ -119,6 +119,7 @@ export default function Auth() {
           ) : null}
           <Button label={signup ? 'Create account' : 'Sign in'} size="lg" onPress={submit} disabled={!ok} loading={busy} full />
           {!signup ? <T v="small">Forgot your password? Ask whoever runs this server to reset it for you.</T> : null}
+          {signup ? <T v="small" onPress={() => router.push('/privacy')}>By creating an account you accept how we handle your data. Read it here.</T> : null}
         </Card>
       </View>
     </Screen>

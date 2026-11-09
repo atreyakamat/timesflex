@@ -310,6 +310,15 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
     response.json({ success: true });
   }));
 
+  // Starting over: removes every timetable version and update, keeping the account.
+  app.delete('/api/institutions/:id/history', route(async (request, response) => {
+    const institution = await ownedInstitution(request, request.params.id);
+    if (!institution) return notFound(response, 'Institution');
+    await store.pruneNotices(institution.id, 0);
+    await store.deleteTimetables(institution.id);
+    response.json({ success: true });
+  }));
+
   app.post('/api/institutions/:id/timetables', route(async (request, response) => {
     const institution = await ownedInstitution(request, request.params.id);
     if (!institution) return notFound(response, 'Institution');

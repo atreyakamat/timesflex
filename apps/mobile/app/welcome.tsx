@@ -1,16 +1,16 @@
 import { Redirect, router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, View, useWindowDimensions } from 'react-native';
+import { useState } from 'react';
+import { Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { api, changeServer } from '../src/api';
 import { useStore } from '../src/store';
 import { radius, space, useTheme } from '../src/theme';
 import { Button, Card, Field, Gradient, Icon, IconButton, Row, Screen, T, type IconName } from '../src/ui';
 
 const FEATURES: { icon: IconName; title: string; text: string }[] = [
-  { icon: 'chatbubble-ellipses-outline', title: 'An assistant that sets it up', text: 'Answer a few friendly questions or just type “Mehta is away Friday”. It shows the change and you approve.' },
+  { icon: 'grid-outline', title: 'Set up in minutes', text: 'Tap your years and branches, add each subject once, and link who teaches it. No spreadsheets.' },
   { icon: 'flask-outline', title: 'Labs and batches, handled', text: 'Practicals run per batch in parallel, in a lab that seats them, never split by lunch.' },
   { icon: 'git-compare-outline', title: 'Many versions to choose from', text: 'Compact days, fewer teacher days, late starts… compare them side by side and keep the best.' },
-  { icon: 'bulb-outline', title: 'It learns your taste', text: 'Every version you pick and class you move teaches it what you like. The next week fits you better.' },
+  { icon: 'paper-plane-outline', title: 'Nobody gets missed', text: 'Change a class or room, and it works out who is affected, writes their message, and tracks who has been told.' },
   { icon: 'help-buoy-outline', title: 'Explains every choice', text: 'Tap any class to see why it is there, and where else it could go.' },
   { icon: 'swap-horizontal-outline', title: 'Cover in one tap', text: 'Someone is out? Fair substitutes are picked automatically and told on WhatsApp.' },
 ];
@@ -21,85 +21,45 @@ const STEPS = [
   ['Pick your favourite version', 'Three clash-free timetables in under a minute. Compare, approve, share.'],
 ];
 
-/** A stack of tilted glass timetable cards that slowly turn, with school icons orbiting. */
-function Stage({ size }: { size: number }) {
+const PREVIEW = [
+  ['Maths', 'DBMS', 'OS', 'Maths', 'Data Str.'],
+  ['OS', 'Data Str.', 'Maths', 'DBMS', 'OS'],
+  ['DBMS', 'Maths', 'DBMS Lab', 'Data Str.', 'Networks'],
+  ['Networks', 'OS', 'DBMS Lab', 'Networks', 'DBMS'],
+];
+const hueFor = (name: string) => [...name].reduce((sum, ch) => sum + ch.charCodeAt(0) * 7, 0) % 360;
+
+/** What the product makes: a real-looking week. */
+function Preview() {
   const { c } = useTheme();
-  const t = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(Animated.timing(t, { toValue: 1, duration: 12000, easing: Easing.linear, useNativeDriver: true }));
-    loop.start();
-    return () => loop.stop();
-  }, [t]);
-  const sway = t.interpolate({ inputRange: [0, 0.5, 1], outputRange: ['-12deg', '12deg', '-12deg'] });
-  const bob = (phase: number, amp: number) =>
-    t.interpolate({ inputRange: [0, 0.25, 0.5, 0.75, 1], outputRange: [0, amp * Math.sin(phase + 1.5), 0, -amp * Math.sin(phase + 1.5), 0] });
-  const tones = [230, 35, 160, 270, 350].map((h) => `hsla(${h}, ${c.tile.sat + 10}%, ${c.tile.light}%, ${c.tile.alpha * 3})`);
-  const card = (depth: number, opacity: number) => (
-    <Animated.View
-      key={depth}
-      style={{
-        position: 'absolute',
-        width: size * 0.78,
-        height: size * 0.56,
-        borderRadius: radius.xl,
-        backgroundColor: c.glassStrong,
-        borderWidth: 1,
-        borderColor: c.glassBorder,
-        opacity,
-        padding: 14,
-        shadowColor: c.shadow,
-        shadowOpacity: 0.18,
-        shadowRadius: 24,
-        shadowOffset: { width: 0, height: 16 },
-        elevation: 6,
-        transform: [{ perspective: 900 }, { translateY: depth * -26 }, { translateX: depth * 18 }, { rotateX: '28deg' }, { rotateZ: '-8deg' }, { rotateY: sway }],
-      }}
-    >
-      <Row gap={6} style={{ marginBottom: 8 }}>
-        {['M', 'T', 'W', 'T', 'F'].map((d, i) => (
-          <T key={i} v="small" style={{ flex: 1, textAlign: 'center', fontWeight: '700' }}>
-            {d}
+  return (
+    <Card style={{ width: '100%', maxWidth: 520, gap: 6, padding: space.md }}>
+      <Row style={{ justifyContent: 'space-between', paddingHorizontal: 4, paddingBottom: 6 }}>
+        <T v="h3">SY Comp A</T>
+        <Row gap={6}>
+          <Icon name="checkmark-circle" size={16} color={c.ok} />
+          <T v="small">No clashes</T>
+        </Row>
+      </Row>
+      <Row gap={6}>
+        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((day) => (
+          <T key={day} v="small" style={{ flex: 1, textAlign: 'center' }}>
+            {day}
           </T>
         ))}
       </Row>
-      {[0, 1, 2, 3].map((row) => (
-        <Row key={row} gap={6} style={{ marginBottom: 6 }}>
-          {[0, 1, 2, 3, 4].map((col) => (
-            <View
-              key={col}
-              style={{ flex: 1, height: size * 0.07, borderRadius: 8, backgroundColor: (row * 2 + col + depth) % 4 === 0 ? c.surface3 : tones[(row + col * 2 + depth) % 5], opacity: 0.85 }}
-            />
+      {PREVIEW.map((row, i) => (
+        <Row key={i} gap={6}>
+          {row.map((name, j) => (
+            <View key={j} style={{ flex: 1, minWidth: 0, paddingVertical: 12, paddingHorizontal: 4, borderRadius: radius.sm, borderLeftWidth: 3, borderLeftColor: `hsl(${hueFor(name)}, ${c.tile.edgeSat}%, ${c.tile.edgeLight}%)`, backgroundColor: `hsla(${hueFor(name)}, ${c.tile.sat}%, ${c.tile.light}%, ${c.tile.alpha * 1.5})` }}>
+              <T v="small" numberOfLines={1} style={{ color: c.text, fontSize: 12, textAlign: 'center' }}>
+                {name}
+              </T>
+            </View>
           ))}
         </Row>
       ))}
-    </Animated.View>
-  );
-  const badge = (icon: IconName, x: number, y: number, phase: number) => (
-    <Animated.View
-      key={icon}
-      style={{ position: 'absolute', left: x * size, top: y * size, transform: [{ translateY: bob(phase, 12) }] }}
-    >
-      <Gradient style={{ width: 52, height: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center' }}>
-        <Icon name={icon} size={26} color="#fff" />
-      </Gradient>
-    </Animated.View>
-  );
-  return (
-    <View style={{ width: size, height: size * 0.9, alignItems: 'center', justifyContent: 'center' }}>
-      {[2, 1, 0].map((depth) => card(depth, depth === 0 ? 1 : 0.6 - depth * 0.15))}
-      {badge('school', 0.02, 0.08, 0)}
-      {badge('book', 0.82, 0.12, 2)}
-      {badge('calculator', 0.86, 0.66, 4)}
-      {badge('flask', 0.04, 0.7, 1)}
-      <Animated.View style={{ position: 'absolute', bottom: 0, transform: [{ translateY: bob(3, 6) }] }}>
-        <Card style={{ paddingVertical: 10, paddingHorizontal: 14 }}>
-          <Row gap={8}>
-            <Icon name="checkmark-circle" size={18} color={c.ok} />
-            <T v="label">48 classes placed · 0 clashes</T>
-          </Row>
-        </Card>
-      </Animated.View>
-    </View>
+    </Card>
   );
 }
 
@@ -165,7 +125,6 @@ export default function Welcome() {
   const wide = width >= 900;
   // While the demo is being prepared, its own screen takes over instead of the usual redirect.
   if (ready && account && !demoBusy) return <Redirect href="/" />;
-  const stage = Math.min(wide ? 520 : width - 32, 560);
 
   return (
     <Screen>
@@ -190,14 +149,14 @@ export default function Welcome() {
             <T v="label">For the faculty member who plans it all</T>
           </View>
           <T v="display" style={{ fontSize: wide ? 56 : 40, lineHeight: wide ? 60 : 44 }}>
-            Your department’s timetable,{'\n'}
+            Your college’s timetable,{'\n'}
             <T v="display" color={c.accent} style={{ fontSize: wide ? 56 : 40, lineHeight: wide ? 60 : 44 }}>
               planned with you.
             </T>
           </T>
           <T style={{ fontSize: 17, lineHeight: 26, maxWidth: 520 }}>
-            Tell TimeFlex about your teachers, classes and rooms in plain words. It builds clash-free versions, explains every
-            choice, and learns how you like your week.
+            Add your classes, subjects and teachers. TimeFlex builds clash-free timetables to choose from, and tells the right
+            teachers when something changes.
           </T>
           <Row gap={12} wrap>
             <Button label="Try the live demo" icon="play" size="lg" onPress={startDemo} loading={demoBusy} />
@@ -214,7 +173,9 @@ export default function Welcome() {
             ))}
           </Row>
         </View>
-        <Stage size={stage} />
+        <View style={{ flex: wide ? 1 : undefined, width: wide ? undefined : '100%', alignItems: 'center' }}>
+          <Preview />
+        </View>
       </View>
 
       <View style={{ marginTop: space.xxl * 2, gap: space.lg }}>
@@ -259,6 +220,9 @@ export default function Welcome() {
         </T>
         <Button label="Create your account" kind="secondary" size="lg" onPress={() => router.push('/auth?mode=signup')} />
       </Gradient>
+      <Pressable accessibilityRole="link" onPress={() => router.push('/privacy')} style={{ alignSelf: 'center', marginTop: space.lg, padding: space.sm }}>
+        <T v="small">Your data</T>
+      </Pressable>
     </Screen>
   );
 }

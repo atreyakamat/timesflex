@@ -16,7 +16,12 @@ import {
   linkTeachersFromList,
   sampleProfile,
   seedRooms,
+  renameInStructure,
+  sampleInstitute,
+  setupEstimate,
   setupInsights,
+  structureImpact,
+  timetableDrift,
   structureBoxes,
   structureTotals,
   subjectDivisions,
@@ -189,4 +194,89 @@ test('the whole path produces a request where each class only gets its own subje
   const inFy = request.sessions.filter((s) => s.division_id === fy);
   assert.equal(inFy.length, 3);
   assert.ok(inFy.every((s) => s.subject_id === p.subjects[0].id));
+});
+
+test('changing how many divisions keeps each class, its students and its subjects', () => {
+  let p = applyStructure(blank(), grid({ years: ['SY'], branches: ['Comp'] }));
+  p = addSubjects(p, SY_COMP, 'DBMS');
+  const id = p.divisions[0].id;
+  p = { ...p, divisions: p.divisions.map((d) => ({ ...d, students: [{ id: 's', rollNo: '1', name: 'A' }] })) };
+  p = applyStructure(p, grid({ years: ['SY'], branches: ['Comp'], cells: { [SY_COMP]: { divisions: 2, students: 60 } } }));
+  assert.equal(p.divisions[0].id, id);
+  assert.equal(p.divisions[0].name, 'SY Comp A');
+  assert.equal(p.divisions[0].students?.length, 1);
+  assert.equal(p.subjects[0].divisionIds?.length, 2);
+});
+
+test('removing a year says exactly what would go, and doing nothing removes nothing', () => {
+  let p = applyStructure(blank(), grid({ years: ['SY', 'TY'], branches: ['Comp'] }));
+  p = addSubjects(p, SY_COMP, 'DBMS, OS');
+  const s = p.structure!;
+  assert.deepEqual(structureImpact(p, s), { classes: [], subjects: [] });
+  const impact = structureImpact(p, { ...s, years: ['TY'] });
+  assert.deepEqual(impact.classes.map((d) => d.name), ['SY Comp']);
+  assert.deepEqual(impact.subjects.map((x) => x.name), ['DBMS', 'OS']);
+});
+
+test('a year or branch can be renamed, and everything stays attached', () => {
+  let p = applyStructure(blank(), grid({ years: ['BE'], cells: { [groupKey('BE', 'Comp')]: { divisions: 2, students: 50 } } }));
+  p = addSubjects(p, groupKey('BE', 'Comp'), 'AI');
+  const ids = p.divisions.map((d) => d.id);
+  p = renameInStructure(p, 'year', 'BE', 'Final');
+  p = renameInStructure(p, 'branch', 'Comp', 'CSE');
+  assert.deepEqual(p.divisions.map((d) => d.name), ['Final CSE A', 'Final CSE B', 'Final IT']);
+  assert.deepEqual(p.divisions.map((d) => d.id).slice(0, 2), ids.slice(0, 2));
+  assert.equal(p.subjects[0].group, groupKey('Final', 'CSE'));
+  assert.equal(subjectsInGroup(p, groupKey('Final', 'CSE')).length, 1);
+  assert.equal(p.structure!.cells[groupKey('Final', 'CSE')].students, 50);
+  // Applying the grid again changes nothing.
+  assert.deepEqual(applyStructure(p, p.structure!).divisions.map((d) => d.id), p.divisions.map((d) => d.id));
+});
+
+test('renaming onto an existing name is refused', () => {
+  const p = applyStructure(blank(), grid());
+  assert.equal(renameInStructure(p, 'year', 'FY', 'sy'), p);
+  assert.equal(renameInStructure(p, 'year', 'FY', '  '), p);
+});
+
+const placed = (subject_id: string, division_id: string, teacher_id: string, batch: string | null = null, duration_slots = 1) =>
+  ({ id: Math.random().toString(36), subject_id, division_id, teacher_id, batch, duration_slots, kind: 'lecture', room_id: 'r', day: 'Monday', slot: 'a' }) as never;
+
+test('the timetable knows what setup has changed: added, removed and reassigned', () => {
+  let p = applyStructure(blank(), grid({ years: ['SY'], branches: ['Comp'], batches: 0 }));
+  p = addSubjects(p, SY_COMP, 'DBMS');
+  p = linkTeachersFromList(p, 'Mehta: DBMS\nRao').profile;
+  const d = p.divisions[0].id;
+  const s = p.subjects[0].id;
+  const [mehta, rao] = p.teachers.map((t) => t.id);
+  const full = [placed(s, d, mehta), placed(s, d, mehta), placed(s, d, mehta)];
+  assert.equal(timetableDrift(p, full).changed, false);
+
+  const added = addSubjects(p, SY_COMP, 'OS');
+  assert.equal(timetableDrift(added, full).missing, 3);
+  assert.equal(timetableDrift(added, full).kept.length, 3);
+
+  const fewer = { ...p, subjects: p.subjects.map((x) => ({ ...x, sessionsPerWeek: 2 })) };
+  assert.equal(timetableDrift(fewer, full).stale.length, 1);
+
+  const gone = { ...p, subjects: [] };
+  assert.equal(timetableDrift(gone, full).stale.length, 3);
+
+  const swapped = linkTeacher(p, s, rao);
+  const drift = timetableDrift(swapped, full);
+  assert.equal(drift.reassigned, 3);
+  assert.ok(drift.kept.every((x) => x.teacher_id === rao));
+  assert.equal(drift.stale.length, 0);
+});
+
+test('the sample college is a real institute, with no problems to fix first', () => {
+  const p = sampleInstitute();
+  assert.deepEqual(classGroups(p).map((g) => g.label), ['FY', 'SY Comp', 'SY IT', 'TY Comp', 'TY IT']);
+  assert.equal(p.divisions.length, 7);
+  assert.equal(setupInsights(p).filter((i) => i.level === 'blocker').length, 0);
+  assert.equal(setupEstimate(p).fits, true);
+  assert.equal(subjectsNeedingTeacher(p).length, 0);
+  assert.ok(p.divisions.every((d) => d.students?.length === d.size));
+  // Sample numbers can't reach a real person.
+  assert.ok(p.teachers.every((t) => t.phone?.startsWith('00000')));
 });

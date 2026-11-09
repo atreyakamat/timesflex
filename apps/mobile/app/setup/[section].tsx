@@ -5,6 +5,7 @@ import {
   applyActions,
   batchNames,
   buildSlots,
+  classGroups,
   createId,
   divisionSize,
   hasExpertise,
@@ -18,7 +19,7 @@ import {
 } from '@core';
 import { useStore, type Profile } from '../../src/store';
 import { space, useTheme } from '../../src/theme';
-import { Avatar, Button, Card, Chip, Empty, Field, Icon, IconButton, Progress, Row, Screen, Segmented, Sheet, Stepper, T } from '../../src/ui';
+import { Avatar, Button, Card, Chip, Empty, Field, Icon, IconButton, Progress, Row, Screen, Segmented, Sheet, Stepper, T, useToast } from '../../src/ui';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const TITLES: Record<string, string> = { basics: 'Basics', teachers: 'Teachers', classes: 'Classes', rooms: 'Rooms & labs', subjects: 'Subjects' };
@@ -134,8 +135,20 @@ function Teachers() {
   );
 }
 
+/** Deleting takes one tap, so taking it back should too. */
+const useRemoval = () => {
+  const { profile, update } = useStore();
+  const toast = useToast();
+  return (what: string, change: (p: Profile) => Profile) => {
+    const before = profile;
+    update(change);
+    toast.show(`${what} removed.`, { label: 'Undo', onPress: () => update(() => before) });
+  };
+};
+
 function Classes() {
   const { profile, update } = useStore();
+  const remove = useRemoval();
   const [editing, setEditing] = useState<DivisionForm | null>(null);
   const last = profile.divisions[profile.divisions.length - 1];
   const save = (division: DivisionForm) => {
@@ -144,7 +157,10 @@ function Classes() {
   };
   return (
     <View style={{ gap: space.md }}>
-      <Button label="Add a class" icon="add" onPress={() => setEditing({ id: createId(), name: (last && nextName(last.name)) || '', size: 60, batches: [] })} />
+      <Row gap={8} wrap>
+        <Button label="Change years and branches" icon="grid-outline" onPress={() => router.push('/onboarding?step=classes')} />
+        <Button label="Add one class" kind="ghost" icon="add" onPress={() => setEditing({ id: createId(), name: (last && nextName(last.name)) || '', size: 60, batches: [] })} />
+      </Row>
       {!profile.divisions.length && <Empty icon="people-outline" title="No classes yet" />}
       {profile.divisions.map((d) => (
         <Card key={d.id} onPress={() => setEditing(d)}>
@@ -188,7 +204,7 @@ function Classes() {
                 label="Delete class"
                 kind="ghost"
                 onPress={() => {
-                  update((p) => ({ ...p, divisions: p.divisions.filter((d) => d.id !== editing.id) }));
+                  remove(editing.name, (p) => ({ ...p, divisions: p.divisions.filter((d) => d.id !== editing.id) }));
                   setEditing(null);
                 }}
               />
@@ -202,6 +218,7 @@ function Classes() {
 
 function Rooms() {
   const { profile, update, liveSessions } = useStore();
+  const remove = useRemoval();
   const [editing, setEditing] = useState<RoomForm | null>(null);
   const last = profile.rooms[profile.rooms.length - 1];
   const save = (room: RoomForm) => {
@@ -251,7 +268,7 @@ function Rooms() {
                 label="Delete room"
                 kind="ghost"
                 onPress={() => {
-                  update((p) => ({ ...p, rooms: p.rooms.filter((r) => r.id !== editing.id) }));
+                  remove(editing.name, (p) => ({ ...p, rooms: p.rooms.filter((r) => r.id !== editing.id) }));
                   setEditing(null);
                 }}
               />
@@ -265,6 +282,7 @@ function Rooms() {
 
 function Subjects() {
   const { profile, update } = useStore();
+  const remove = useRemoval();
   const { c } = useTheme();
   const [editing, setEditing] = useState<SubjectForm | null>(null);
   const save = (subject: SubjectForm) => {
@@ -274,14 +292,18 @@ function Subjects() {
   const teacherName = (id: string) => profile.teachers.find((t) => t.id === id)?.name;
   return (
     <View style={{ gap: space.md }}>
+      <Button label="Add subjects by year and branch" icon="grid-outline" onPress={() => router.push('/onboarding?step=subjects')} />
       <Button
-        label="Add a subject"
+        label="Add one subject"
+        kind="ghost"
         icon="add"
         onPress={() => setEditing({ id: createId(), name: '', isLab: false, sessionsPerWeek: 3, durationSlots: 1, teacherId: '', roomId: '', divisionIds: [], teacherOverrides: {} })}
       />
       {!profile.subjects.length && <Empty icon="book-outline" title="No subjects yet" />}
-      {profile.subjects.map((s) => (
-        <Card key={s.id} onPress={() => setEditing(s)} tone={!teacherName(s.teacherId) ? 'warn' : undefined}>
+      {profile.subjects.map((s, index) => (
+        <View key={s.id} style={{ gap: space.sm }}>
+        {index === 0 || (profile.subjects[index - 1].group ?? '') !== (s.group ?? '') ? <T v="eyebrow" style={{ marginTop: index ? space.md : 0 }}>{classGroups(profile).find((g) => g.key === (s.group ?? ''))?.label ?? 'Other subjects'}</T> : null}
+        <Card onPress={() => setEditing(s)} tone={!teacherName(s.teacherId) && !Object.keys(s.teacherOverrides ?? {}).length ? 'warn' : undefined}>
           <Row style={{ justifyContent: 'space-between' }}>
             <View style={{ flex: 1 }}>
               <T v="h3">
@@ -296,6 +318,7 @@ function Subjects() {
             <Icon name="create-outline" size={20} />
           </Row>
         </Card>
+        </View>
       ))}
       <Sheet visible={!!editing} onClose={() => setEditing(null)} title="Subject">
         {editing && (
@@ -347,7 +370,7 @@ function Subjects() {
                 label="Delete subject"
                 kind="ghost"
                 onPress={() => {
-                  update((p) => ({ ...p, subjects: p.subjects.filter((s) => s.id !== editing.id) }));
+                  remove(editing.name, (p) => ({ ...p, subjects: p.subjects.filter((s) => s.id !== editing.id) }));
                   setEditing(null);
                 }}
               />

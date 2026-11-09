@@ -4,12 +4,13 @@ import { Linking, View } from 'react-native';
 import { sessionsOnDay, subjectDivisions, teacherCapacity, teacherFor, teacherLoad, weekAsText, whatsappLink, type TeacherForm } from '@core';
 import { useStore } from '../../src/store';
 import { space, useTheme } from '../../src/theme';
-import { Avatar, Button, Card, Chip, Empty, Field, IconButton, Progress, Row, Screen, SectionTitle, Stepper, T } from '../../src/ui';
+import { Avatar, Button, Card, Chip, Empty, Field, IconButton, Progress, Row, Screen, SectionTitle, Stepper, T, useToast } from '../../src/ui';
 
 /** One professor's profile: who they are, what they know, what they teach, and their week. */
 export default function TeacherProfile() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { profile, update, liveSessions, slots, names } = useStore();
+  const toast = useToast();
   const { c } = useTheme();
   const teacher = profile.teachers.find((t) => t.id === id);
   const [tag, setTag] = useState('');
@@ -136,7 +137,9 @@ export default function TeacherProfile() {
         kind="ghost"
         style={{ marginTop: space.xl }}
         onPress={() => {
+          const before = profile;
           update((p) => ({ ...p, teachers: p.teachers.filter((t) => t.id !== teacher.id) }));
+          toast.show(`${teacher.name} removed.`, { label: 'Undo', onPress: () => update(() => before) });
           router.back();
         }}
       />

@@ -370,6 +370,71 @@ try {
   const tts = await (await fetch(`${API}/api/institutions/${statusAfter.institution.id}/timetables`, { headers: { Authorization: `Bearer ${token}` } })).json();
   check('it is still the approved version', tts.some((t) => t.status === 'approved'));
 
+  // Reloading any screen must keep you signed in, with your data showing straight away.
+  for (const page of ['more', 'setup/subjects', 'attendance', 'updates']) {
+    await go(`${APP}/${page}`);
+    await sleep(1200);
+    const still = await evaluate(`location.pathname.includes('welcome') === false && !!localStorage.getItem('timeflex.session')`);
+    check(`reloading ${page} keeps you signed in`, still);
+  }
+  await go(`${APP}/attendance`);
+  await waitFor(`__has('Tap the students who are absent') || __has('has no classes on this day')`, 8000);
+  check('attendance opens on a class with its students', !(await has('No class list yet')));
+  await shot('18-attendance');
+  await go(`${APP}/setup/subjects`);
+  await waitFor(`__has('Operating Systems')`, 5000);
+  check('setup screens show saved data after a reload', !(await has('No subjects yet')));
+
+  // Adding to the setup updates the timetable without moving anything.
+  const sessionsBefore = (await (await fetch(`${API}/api/institutions/${statusAfter.institution.id}/timetables`, { headers: { Authorization: `Bearer ${token}` } })).json()).find((t) => t.status === 'approved').generatedSessions;
+  await go(`${APP}/onboarding?step=subjects`);
+  await waitFor(`__has('Subjects for')`, 8000);
+  await type('e.g. DBMS, Operating Systems, DBMS Lab', 'Ethics');
+  await click('Add subjects');
+  await waitFor(`__has('Ethics')`, 3000);
+  await sleep(1500);
+  await go(`${APP}/timetable`);
+  await waitFor(`__has('Your setup has changed')`, 10000);
+  check('the timetable notices the setup has changed', await has('new class'));
+  await shot('15-setup-changed');
+  await click('Update the timetable');
+  await waitFor(`__has('Everything else stayed where it was')`, 40000);
+  await sleep(1500);
+  const afterAll = await (await fetch(`${API}/api/institutions/${statusAfter.institution.id}/timetables`, { headers: { Authorization: `Bearer ${token}` } })).json();
+  const nowLive = afterAll.filter((t) => t.status === 'approved');
+  check('there is exactly one approved timetable afterwards', nowLive.length === 1, String(nowLive.length));
+  const place = (s) => `${s.id}|${s.day}|${s.slot}|${s.room_id}|${s.teacher_id}`;
+  const afterPlaces = new Set(nowLive[0].generatedSessions.map(place));
+  check('every existing class stayed exactly where it was', sessionsBefore.every((s) => afterPlaces.has(place(s))), `${sessionsBefore.length} checked`);
+  check('the new classes were added', nowLive[0].generatedSessions.length > sessionsBefore.length);
+  check('classes are not left showing as locked', !nowLive[0].generatedSessions.some((s) => s.locked));
+
+  // Removing a year warns first and can be undone; renaming keeps everything.
+  await go(`${APP}/onboarding?step=classes`);
+  await waitFor(`__has('Years')`, 8000);
+  await click('TY');
+  await waitFor(`__has('Remove these?')`, 5000);
+  check('removing a year asks first and says what would go', await has('Yes, remove them'));
+  await shot('16-remove-warning');
+  await click('Keep them');
+  await sleep(500);
+  check('choosing to keep it removes nothing', await has('TY Comp'));
+  await click('Rename');
+  await waitFor(`__has('Rename years and branches')`, 3000);
+  await sleep(300);
+  await shot('17-rename');
+  await click('Done');
+  await sleep(400);
+
+  // Sample data and starting over.
+  await go(`${APP}/more`);
+  await waitFor(`__has('Start over')`, 8000);
+  await click('Start over');
+  await waitFor(`__has('can’t be undone')`, 3000);
+  check('starting over warns that it cannot be undone', true);
+  await click('Keep what I have');
+  await sleep(400);
+
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await go(`${APP}/updates`);
   await waitFor(`__has('Tell your teachers')`, 10000);
@@ -380,6 +445,14 @@ try {
   const overflow = await evaluate(`document.documentElement.scrollWidth - window.innerWidth`);
   check('no sideways scrolling on a phone', overflow <= 0, `${overflow}px`);
   await shot('07-phone-timetable');
+
+  // Signed out, a page that needs an account goes to the start page.
+  const keep = await evaluate(`localStorage.getItem('timeflex.session')`);
+  await evaluate(`localStorage.removeItem('timeflex.session')`);
+  await go(`${APP}/setup/subjects`);
+  await waitFor(`location.pathname === '/welcome'`, 8000);
+  check('signed out, setup pages go to the start page', true);
+  await evaluate(`localStorage.setItem('timeflex.session', ${JSON.stringify(keep)})`);
 
   check('no console errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '));
 } catch (error) {

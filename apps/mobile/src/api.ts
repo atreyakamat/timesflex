@@ -40,10 +40,29 @@ const SERVER_KEY = 'timeflex.server';
 let token: string | null = null;
 let onUnauthorized: () => void = () => {};
 
+// Every request waits for this. Without it, a screen that asks for something as it opens goes
+// out with no login, gets "please sign in" back, and signs the person out.
+let loaded: Promise<void> | null = null;
+const whenLoaded = () =>
+  (loaded ??= (async () => {
+    serverOverride = await storage.get(SERVER_KEY);
+    token = await storage.get(TOKEN_KEY);
+  })());
+
 export const loadToken = async () => {
-  serverOverride = await storage.get(SERVER_KEY);
-  token = await storage.get(TOKEN_KEY);
+  await whenLoaded();
   return token;
+};
+
+/** fetch with a time limit. Written by hand because AbortSignal.timeout isn't on every phone. */
+const fetchWithin = async (url: string, init: RequestInit, ms: number) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 /**
@@ -55,7 +74,7 @@ export const changeServer = async (address: string) => {
   const url = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   let isTimeFlex = false;
   try {
-    const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(6000) });
+    const response = await fetchWithin(`${url}/health`, {}, 6000);
     isTimeFlex = response.ok && (await response.json()).service === 'timesflex-api';
   } catch {
     // Reported below.
@@ -82,14 +101,20 @@ export class ApiError extends Error {
   }
 }
 
-const request = async <T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> => {
+const request = async <T>(path: string, options: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> => {
+  await whenLoaded();
+  const sentToken = token;
   let response: Response;
   try {
-    response = await fetch(`${apiBase()}${path}`, {
-      method: options.method ?? 'GET',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-    });
+    response = await fetchWithin(
+      `${apiBase()}${path}`,
+      {
+        method: options.method ?? 'GET',
+        headers: { 'Content-Type': 'application/json', ...(sentToken ? { Authorization: `Bearer ${sentToken}` } : {}) },
+        ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+      },
+      options.timeoutMs ?? 30000,
+    );
   } catch {
     throw new ApiError(`Cannot reach the TimeFlex server${apiBase() ? ` at ${apiBase()}` : ''}. Is it running?`, 0);
   }
@@ -101,7 +126,8 @@ const request = async <T>(path: string, options: { method?: string; body?: unkno
     } catch {
       // Plain-text error body.
     }
-    if (response.status === 401 && !path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/signup')) {
+    // Only a login the server has actually refused counts as being signed out.
+    if (response.status === 401 && sentToken && sentToken === token && !path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/signup')) {
       await setToken(null);
       onUnauthorized();
     }
@@ -148,7 +174,8 @@ export const api = {
   createTimetable: (id: string, body: { label: string; request: SolverRequest }) =>
     request<TimetableRecord>(`/api/institutions/${id}/timetables`, { method: 'POST', body }),
   solve: (timetableId: string) =>
-    request<{ timetable: TimetableRecord; solver: SolverResult }>(`/api/timetables/${timetableId}/solve`, { method: 'POST' }),
+    request<{ timetable: TimetableRecord; solver: SolverResult }>(`/api/timetables/${timetableId}/solve`, { method: 'POST', timeoutMs: 180000 }),
+  clearInstitution: (id: string) => request(`/api/institutions/${id}/history`, { method: 'DELETE' }),
   updateTimetable: (timetableId: string, body: { generatedSessions?: unknown[]; status?: TimetableStatus }) =>
     request<TimetableRecord>(`/api/timetables/${timetableId}`, { method: 'PUT', body }),
   interpret: (text: string, context: Record<string, string[]>) =>
@@ -159,7 +186,7 @@ export const api = {
   createNotice: (id: string, body: Pick<TimetableUpdate, 'title' | 'kind' | 'groupText' | 'recipients'>) => request<NoticeRecord>(`/api/institutions/${id}/notices`, { method: 'POST', body }),
   markRecipient: (noticeId: string, teacherId: string, status: NoticeRecipient['status']) => request<NoticeRecord>(`/api/notices/${noticeId}/recipients/${teacherId}`, { method: 'PUT', body: { status } }),
   markGroup: (noticeId: string, shared: boolean) => request<NoticeRecord>(`/api/notices/${noticeId}/group`, { method: 'PUT', body: { shared } }),
-  sendNotice: (noticeId: string) => request<NoticeRecord>(`/api/notices/${noticeId}/send`, { method: 'POST', body: {} }),
+  sendNotice: (noticeId: string) => request<NoticeRecord>(`/api/notices/${noticeId}/send`, { method: 'POST', body: {}, timeoutMs: 180000 }),
   notifyStatus: () => request<{ whatsappApi: boolean }>('/api/notify/status'),
   aiStatus: () => request<{ provider: string; reachable: boolean; modelAvailable: boolean; model: string; error?: string | null }>('/api/ai/status'),
 };

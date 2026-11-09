@@ -20,7 +20,19 @@ if grep -q '^POSTGRES_PASSWORD=change-me$' .env; then
   exit 1
 fi
 
-docker compose up -d --build --wait --wait-timeout 300
+docker compose up -d --build
+
+# Not "up --wait": it counts the model download finishing as a failure.
+echo "Waiting for the app to be ready..."
+tries=0
+until [ "$(docker compose ps web --format '{{.Health}}')" = "healthy" ]; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 100 ]; then
+    echo "The app did not become healthy. See: docker compose logs web api" >&2
+    exit 1
+  fi
+  sleep 3
+done
 
 port=$(sed -n 's/^WEB_PORT=//p' .env | head -n 1)
 address=$(tailscale ip -4 2>/dev/null | head -n 1 || true)

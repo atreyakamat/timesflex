@@ -166,19 +166,19 @@ type Variant = 'display' | 'h1' | 'h2' | 'h3' | 'body' | 'small' | 'eyebrow' | '
 const textStyle = (variant: Variant, c: Palette): TextStyle => {
   switch (variant) {
     case 'display':
-      return { fontSize: 40, lineHeight: 44, fontWeight: '800', letterSpacing: -1.2, color: c.text };
+      return { fontSize: 40, lineHeight: 46, fontWeight: '700', letterSpacing: -0.6, color: c.text };
     case 'h1':
-      return { fontSize: 28, lineHeight: 34, fontWeight: '800', letterSpacing: -0.6, color: c.text };
+      return { fontSize: 26, lineHeight: 32, fontWeight: '700', letterSpacing: -0.3, color: c.text };
     case 'h2':
-      return { fontSize: 20, lineHeight: 26, fontWeight: '700', letterSpacing: -0.3, color: c.text };
+      return { fontSize: 19, lineHeight: 25, fontWeight: '600', letterSpacing: -0.1, color: c.text };
     case 'h3':
-      return { fontSize: 16, lineHeight: 22, fontWeight: '700', color: c.text };
+      return { fontSize: 15, lineHeight: 21, fontWeight: '600', color: c.text };
     case 'small':
       return { fontSize: 13, lineHeight: 18, color: c.muted };
     case 'eyebrow':
-      return { fontSize: 12, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase', color: c.accent };
+      return { fontSize: 12, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', color: c.accent };
     case 'label':
-      return { fontSize: 13, fontWeight: '600', color: c.text2 };
+      return { fontSize: 13, fontWeight: '500', color: c.text2 };
     case 'mono':
       return { fontSize: 12, color: c.muted, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) };
     default:
@@ -186,10 +186,10 @@ const textStyle = (variant: Variant, c: Palette): TextStyle => {
   }
 };
 
-export function T({ children, v = 'body', style, numberOfLines, color }: { children: ReactNode; v?: Variant; style?: StyleProp<TextStyle>; numberOfLines?: number; color?: string }) {
+export function T({ children, v = 'body', style, numberOfLines, color, onPress }: { children: ReactNode; v?: Variant; style?: StyleProp<TextStyle>; numberOfLines?: number; color?: string; onPress?: () => void }) {
   const { c } = useTheme();
   return (
-    <Text numberOfLines={numberOfLines} style={[textStyle(v, c), color ? { color } : null, style]}>
+    <Text numberOfLines={numberOfLines} onPress={onPress} style={[textStyle(v, c), color ? { color } : null, onPress ? { textDecorationLine: 'underline' } : null, style]}>
       {children}
     </Text>
   );
@@ -264,7 +264,7 @@ export function Button({
   const content = (
     <Row gap={8} style={{ justifyContent: 'center' }}>
       {loading ? <ActivityIndicator color={fg} size="small" /> : icon ? <Icon name={icon} size={fontSize + 3} color={fg} /> : null}
-      <Text style={{ color: fg, fontWeight: '700', fontSize }}>{label}</Text>
+      <Text style={{ color: fg, fontWeight: '600', fontSize }}>{label}</Text>
     </Row>
   );
   return (
@@ -342,7 +342,7 @@ export function Chip({ label, active, onPress, icon, tone, a11yLabel }: { label:
       ]}
     >
       {icon && <Icon name={icon} size={15} color={fg} />}
-      <Text style={{ color: fg, fontWeight: '600', fontSize: 14 }}>{label}</Text>
+      <Text style={{ color: fg, fontWeight: '500', fontSize: 14 }}>{label}</Text>
     </Pressable>
   );
 }

@@ -1,8 +1,8 @@
 import { applyActions } from './agent';
 import { canTeach, parseSubjectList, parseTeacherLines, seedRooms } from './onboarding';
 import type { ProfileData } from './samples';
-import type { DivisionForm, SubjectForm } from './types';
-import { buildSlots, createId, divisionSize, subjectDivisions } from './utils';
+import type { DivisionForm, ScheduledSession, SubjectForm } from './types';
+import { buildSlots, createId, divisionSize, subjectDivisions, teacherFor } from './utils';
 import { batchNames } from './naming';
 
 /**
@@ -70,8 +70,8 @@ const addSubjectTo = (subject: SubjectForm, divisions: DivisionForm[]) => {
  */
 export const applyStructure = <P extends ProfileData>(profile: P, structure: InstituteStructure): P => {
   const wanted: DivisionForm[] = structureBoxes(structure).flatMap((box) =>
-    divisionNames(box.label, box.divisions).map((name) => {
-      const existing = profile.divisions.find((d) => d.group && same(d.name, name));
+    divisionNames(box.label, box.divisions).map((name, position) => {
+      const existing = profile.divisions.filter((d) => d.group === box.key)[position];
       const batches = existing?.batches.length === structure.batches ? existing.batches : structure.batches ? batchNames(name, structure.batches) : [];
       return { ...(existing ?? { id: createId() }), name, batches, size: box.students, year: box.year, branch: box.branch, group: box.key };
     }),
@@ -85,6 +85,45 @@ export const applyStructure = <P extends ProfileData>(profile: P, structure: Ins
     return next.divisionIds?.length ? [next] : [];
   });
   return { ...profile, structure, divisions, subjects };
+};
+
+/** What a change to the grid would remove, so it can be confirmed first. */
+export const structureImpact = (profile: ProfileData, next: InstituteStructure) => {
+  const after = applyStructure(profile, next);
+  const classes = profile.divisions.filter((d) => !after.divisions.some((other) => other.id === d.id));
+  const subjects = profile.subjects.filter((s) => !after.subjects.some((other) => other.id === s.id));
+  return { classes, subjects };
+};
+
+/** Renames a year or branch everywhere it appears, keeping every class and subject attached. */
+export const renameInStructure = <P extends ProfileData>(profile: P, kind: 'year' | 'branch', from: string, to: string): P => {
+  const name = to.trim();
+  const structure = profile.structure;
+  const list = kind === 'year' ? structure?.years : structure?.branches;
+  if (!structure || !name || !list?.includes(from) || list.some((item) => item !== from && same(item, name))) return profile;
+  const swap = (value: string) => (value === from ? name : value);
+  const newKey = (key: string) => {
+    const [year, branch] = key.split('|');
+    return kind === 'year' ? groupKey(swap(year), branch) : groupKey(year, swap(branch));
+  };
+  return {
+    ...profile,
+    structure: {
+      ...structure,
+      years: kind === 'year' ? structure.years.map(swap) : structure.years,
+      branches: kind === 'branch' ? structure.branches.map(swap) : structure.branches,
+      commonYears: kind === 'year' ? structure.commonYears.map(swap) : structure.commonYears,
+      cells: Object.fromEntries(Object.entries(structure.cells).map(([key, cell]) => [newKey(key), cell])),
+    },
+    divisions: profile.divisions.map((division) => {
+      if (!division.group) return division;
+      const oldLabel = groupName(division.year ?? '', division.branch ?? '');
+      const year = kind === 'year' ? swap(division.year ?? '') : (division.year ?? '');
+      const branch = kind === 'branch' ? swap(division.branch ?? '') : (division.branch ?? '');
+      return { ...division, year, branch, group: newKey(division.group), name: `${groupName(year, branch)}${division.name.slice(oldLabel.length)}` };
+    }),
+    subjects: profile.subjects.map((subject) => (subject.group ? { ...subject, group: newKey(subject.group) } : subject)),
+  };
 };
 
 export interface ClassGroup {
@@ -213,6 +252,42 @@ export const addMissingRooms = <P extends ProfileData>(profile: P): P => {
     return need.slice(have).map((room) => ({ ...room, id: createId(), name: uniqueName(kind === 'lab' ? 'Lab' : 'Room', kind === 'lab' ? 1 : 101), capacity: room.capacity || largest || 60 }));
   };
   return { ...profile, rooms: [...profile.rooms, ...extra('classroom'), ...extra('lab')] };
+};
+
+export interface TimetableDrift {
+  /** Classes still right, with any change of teacher applied. They can stay exactly where they are. */
+  kept: ScheduledSession[];
+  /** How many classes the setup needs that aren't on the timetable. */
+  missing: number;
+  /** Classes on the timetable whose subject, class or teacher has gone. */
+  stale: ScheduledSession[];
+  reassigned: number;
+  changed: boolean;
+}
+
+/** How the timetable differs from the setup, after classes, subjects or teachers change. */
+export const timetableDrift = (profile: Pick<ProfileData, 'subjects' | 'divisions'>, sessions: ScheduledSession[]): TimetableDrift => {
+  const remaining = new Set(sessions.map((s) => s.id));
+  const kept: ScheduledSession[] = [];
+  let missing = 0;
+  let reassigned = 0;
+  for (const subject of profile.subjects) {
+    for (const division of subjectDivisions(subject, profile.divisions)) {
+      for (const batch of subject.isLab && division.batches.length ? division.batches : [null]) {
+        const here = sessions.filter((s) => remaining.has(s.id) && s.subject_id === subject.id && s.division_id === division.id && (s.batch ?? null) === batch && s.duration_slots === subject.durationSlots);
+        const keep = here.slice(0, subject.sessionsPerWeek);
+        const teacher = teacherFor(subject, division.id);
+        for (const session of keep) {
+          remaining.delete(session.id);
+          if (session.teacher_id !== teacher) reassigned += 1;
+          kept.push({ ...session, teacher_id: teacher });
+        }
+        missing += subject.sessionsPerWeek - keep.length;
+      }
+    }
+  }
+  const stale = sessions.filter((s) => remaining.has(s.id));
+  return { kept, missing, stale, reassigned, changed: missing > 0 || stale.length > 0 || reassigned > 0 };
 };
 
 /** Periods a week, for showing how full things are. */

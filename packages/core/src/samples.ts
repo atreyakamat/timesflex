@@ -34,7 +34,7 @@ const LAST = [
   'Fernandes', 'Kamat', 'Shetty', 'Bhat', 'Chavan', 'Mehta', 'Pillai', 'Verma',
 ];
 
-const roster = (prefix: string, count: number, offset: number): StudentRecord[] =>
+export const rosterOf = (prefix: string, count: number, offset: number): StudentRecord[] =>
   Array.from({ length: count }, (_, index) => {
     const name = `${FIRST[(index * 7 + offset) % FIRST.length]} ${LAST[(index * 3 + offset) % LAST.length]}`;
     return { id: createId(), rollNo: `${prefix}${String(index + 1).padStart(2, '0')}`, name };
@@ -57,7 +57,7 @@ export const sampleProfile = (): ProfileData => {
     experienceYears: 14,
     expertise: ['Databases', 'DBMS', 'SQL', 'Data Mining'],
     email: 'mehta@sample-college.edu',
-    phone: '9820012345',
+    phone: '00000 10001',
     unavailableDays: ['Friday'],
   });
   const rao = teacher('Dr. Rao', {
@@ -70,7 +70,7 @@ export const sampleProfile = (): ProfileData => {
   });
   const kulkarni = teacher('Ms. Kulkarni', {
     designation: 'Assistant Professor',
-    phone: '9820054321',
+    phone: '00000 10002',
     qualification: 'M.Sc Mathematics',
     expertise: ['Mathematics', 'Statistics'],
   });
@@ -104,8 +104,8 @@ export const sampleProfile = (): ProfileData => {
   const yearLabel = 'Second year · Semester 3';
   const seA: DivisionForm = { id: createId(), name: 'SE-A', batches: ['A1', 'A2'], yearLabel, classTeacherId: mehta.id };
   const seB: DivisionForm = { id: createId(), name: 'SE-B', batches: ['B1', 'B2'], yearLabel, classTeacherId: kulkarni.id };
-  seA.students = splitIntoBatches(roster('SEA', 60, 0), seA.batches);
-  seB.students = splitIntoBatches(roster('SEB', 56, 5), seB.batches);
+  seA.students = splitIntoBatches(rosterOf('SEA', 60, 0), seA.batches);
+  seB.students = splitIntoBatches(rosterOf('SEB', 56, 5), seB.batches);
   seA.size = seA.students.length;
   seB.size = seB.students.length;
 

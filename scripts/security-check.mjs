@@ -91,6 +91,7 @@ for (const [name, method, url, body] of [
   ['add an update to another college', 'POST', `${inst}/notices`, noticeBody],
   ['change another college’s update', 'PUT', `/api/notices/${notice.json?.id}/recipients/t1`, { status: 'skipped' }],
   ['send another college’s update', 'POST', `/api/notices/${notice.json?.id}/send`],
+  ['wipe another college’s timetables', 'DELETE', `${inst}/history`],
 ]) {
   const r = await call(method, url, { token: mallory.token, body });
   check(`cannot ${name}`, r.status === 404 || (r.status === 409 && name.startsWith('send')), r.status);

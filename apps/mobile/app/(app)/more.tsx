@@ -5,7 +5,7 @@ import { describePreferences, divisionSize } from '@core';
 import { api } from '../../src/api';
 import { useStore } from '../../src/store';
 import { space, useTheme } from '../../src/theme';
-import { Avatar, Button, Card, Field, Icon, Row, Screen, SectionTitle, Segmented, T, useWide, type IconName } from '../../src/ui';
+import { Avatar, Button, Card, Field, Icon, Row, Screen, SectionTitle, Segmented, Sheet, T, useToast, useWide, type IconName } from '../../src/ui';
 
 export default function More() {
   const store = useStore();
@@ -20,6 +20,22 @@ export default function More() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [passwordNote, setPasswordNote] = useState('');
+  const [wiping, setWiping] = useState<'sample' | 'empty' | null>(null);
+  const [wipeBusy, setWipeBusy] = useState(false);
+  const toast = useToast();
+  const hasData = profile.divisions.length + profile.teachers.length + profile.subjects.length > 0;
+  const wipe = async (sample: boolean) => {
+    setWipeBusy(true);
+    try {
+      await store.startOver(sample);
+      setWiping(null);
+      router.replace(sample ? '/onboarding?step=review' : '/onboarding?step=classes');
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : 'Could not do that.');
+    } finally {
+      setWipeBusy(false);
+    }
+  };
   const changePassword = async () => {
     setPasswordNote('');
     try {
@@ -40,20 +56,22 @@ export default function More() {
         setAi(
           s.reachable && s.modelAvailable
             ? s.provider === 'anthropic'
-              ? `Claude ready · ${s.model}`
-              : `Local AI ready · ${s.model}`
-            : `${s.error ?? 'AI offline'} · built-in rules are used`,
+              ? 'Smart understanding is on (Claude)'
+              : 'Smart understanding is on'
+            : 'Understands common phrases. Smart understanding is off right now.',
         ),
       )
-      .catch(() => setAi('Local AI offline · built-in rules are used'));
+      .catch(() => setAi('Understands common phrases. Smart understanding is off right now.'));
   }, []);
 
   const rows: [string, string, IconName, string][] = [
     ['Basics', `${profile.institution.workingDays.length} days · ${profile.institution.startTime}–${profile.institution.endTime}`, 'calendar-outline', '/setup/basics'],
-    ['Teachers', `${profile.teachers.length} profiles`, 'person-outline', '/setup/teachers'],
-    ['Classes', `${profile.divisions.length} classes · ${profile.divisions.reduce((s, d) => s + divisionSize(d), 0)} students`, 'people-outline', '/setup/classes'],
+    ['Years, branches and classes', `${profile.divisions.length} classes · ${profile.divisions.reduce((s, d) => s + divisionSize(d), 0)} students`, 'people-outline', '/onboarding?step=classes'],
+    ['Subjects', `${profile.subjects.length} subjects`, 'book-outline', '/onboarding?step=subjects'],
+    ['Who teaches what', `${profile.teachers.length} teachers`, 'git-network-outline', '/onboarding?step=teachers'],
+    ['Teacher profiles', 'Numbers, days off and limits', 'person-outline', '/setup/teachers'],
     ['Rooms & labs', `${profile.rooms.length} rooms`, 'business-outline', '/setup/rooms'],
-    ['Subjects', `${profile.subjects.length} subjects`, 'book-outline', '/setup/subjects'],
+    ['Class lists', 'Students, batches and class teachers', 'list-outline', '/setup/classes'],
   ];
 
   return (
@@ -69,7 +87,7 @@ export default function More() {
         <T v="small">{profile.institution.name}</T>
       </Card>
 
-      <SectionTitle title="Your department" />
+      <SectionTitle title="Your college" />
       <View style={{ gap: space.sm }}>
         {rows.map(([title, detail, icon, href]) => (
           <Card key={title} onPress={() => router.push(href as never)} style={{ paddingVertical: space.md }}>
@@ -83,16 +101,6 @@ export default function More() {
             </Row>
           </Card>
         ))}
-        <Card onPress={() => router.push('/onboarding')} style={{ paddingVertical: space.md }}>
-          <Row gap={12}>
-            <Icon name="chatbubbles-outline" size={22} color={c.accent} />
-            <View style={{ flex: 1 }}>
-              <T v="h3">Guided setup again</T>
-              <T v="small">The assistant walks you through everything, one question at a time.</T>
-            </View>
-            <Icon name="chevron-forward" size={20} color={c.muted} />
-          </Row>
-        </Card>
         <Card onPress={() => router.push('/attendance')} style={{ paddingVertical: space.md }}>
           <Row gap={12}>
             <Icon name="checkbox-outline" size={22} color={c.accent} />
@@ -112,8 +120,41 @@ export default function More() {
           <T style={{ flex: 1 }}>{ai}</T>
         </Row>
         <T v="small">{describePreferences(profile.learning)}</T>
-        <T v="small">Learned from {profile.learning.observations} choice(s) and move(s).</T>
       </Card>
+
+      <SectionTitle title="Try things out" />
+      <View style={{ gap: space.sm }}>
+        <Card onPress={() => (hasData ? setWiping('sample') : wipe(true))} style={{ paddingVertical: space.md }}>
+          <Row gap={12}>
+            <Icon name="flask-outline" size={22} color={c.accent} />
+            <View style={{ flex: 1 }}>
+              <T v="h3">Load the sample college</T>
+              <T v="small">7 classes, 12 teachers, class lists and 23 subjects to explore.</T>
+            </View>
+            <Icon name="chevron-forward" size={20} color={c.muted} />
+          </Row>
+        </Card>
+        {hasData ? (
+          <Card onPress={() => setWiping('empty')} style={{ paddingVertical: space.md }}>
+            <Row gap={12}>
+              <Icon name="refresh-outline" size={22} color={c.muted} />
+              <View style={{ flex: 1 }}>
+                <T v="h3">Start over</T>
+                <T v="small">Clear everything and set up from the beginning.</T>
+              </View>
+              <Icon name="chevron-forward" size={20} color={c.muted} />
+            </Row>
+          </Card>
+        ) : null}
+      </View>
+
+      <Sheet visible={!!wiping} onClose={() => setWiping(null)} title={wiping === 'sample' ? 'Replace everything with the sample?' : 'Start over?'}>
+        <T>
+          This permanently removes {profile.divisions.length} classes, {profile.subjects.length} subjects, {profile.teachers.length} teachers, {profile.rooms.length} rooms, and every timetable, update and attendance record. Your account stays. This can’t be undone.
+        </T>
+        <Button label={wiping === 'sample' ? 'Yes, replace it all' : 'Yes, clear everything'} kind="danger" loading={wipeBusy} onPress={() => wipe(wiping === 'sample')} />
+        <Button label="Keep what I have" kind="ghost" onPress={() => setWiping(null)} />
+      </Sheet>
 
       <SectionTitle title="Appearance" />
       <Segmented
@@ -128,6 +169,7 @@ export default function More() {
 
       <SectionTitle title="Account" />
       <View style={{ gap: space.sm }}>
+        <Button label="Your data" kind="ghost" icon="shield-checkmark-outline" onPress={() => router.push('/privacy')} />
         {!changing ? (
           <Button label="Change password" kind="secondary" icon="key-outline" onPress={() => setChanging(true)} />
         ) : (

@@ -119,10 +119,17 @@ On any Linux server with Docker and at least 4 GB of memory:
 
 Use HTTPS for real data: without it, passwords travel unencrypted.
 
-**Back up the database** on a schedule:
+**Backups** run automatically once a day and are kept for 14 days. They stay on this machine, so copy them
+somewhere else as well:
 
 ```bash
-docker compose exec -T db pg_dump -U timeflex timeflex > backup.sql
+docker compose cp backup:/backups ./timeflex-backups
+```
+
+To restore one onto an empty database, replacing the date with the one you want:
+
+```bash
+docker compose exec -T backup sh -c 'gunzip -c /backups/timeflex-2026-11-09.sql.gz' | docker compose exec -T db psql -U timeflex -d timeflex
 ```
 
 ## Limits worth knowing
@@ -137,5 +144,5 @@ docker compose exec -T db pg_dump -U timeflex timeflex > backup.sql
 ## Before real colleges use a public server
 
 - There is no e-mail password reset yet; use the command above.
-- There is no privacy policy or terms page yet.
+- The **Your data** page describes what's stored. It's a plain-language draft, so have it checked against India's data protection law (DPDP Act), and add terms of use.
 - Demo accounts are removed after a day. To turn the demo off, set `ALLOW_DEMO=false`.

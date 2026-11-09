@@ -13,3 +13,4 @@ export * from './draft';
 export * from './onboarding';
 export * from './changes';
 export * from './structure';
+export * from './sampleInstitute';

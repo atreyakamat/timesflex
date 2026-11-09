@@ -24,13 +24,14 @@ interface Message {
   state?: 'proposed' | 'applied' | 'cancelled' | 'working';
 }
 
-const EXAMPLES = ['Mehta is away tomorrow', 'make 3 variations', 'max 3 a day for Rao', 'add lab 3 with 32 seats', 'Iyer can’t teach on Fridays'];
 
 export default function Assistant() {
   const store = useStore();
   const { profile, liveSessions, unplaced } = store;
   const { c } = useTheme();
   const [text, setText] = useState('');
+  const surname = (index: number) => profile.teachers[index % Math.max(1, profile.teachers.length)]?.name.split(/\s+/).pop() ?? 'Mehta';
+  const EXAMPLES = [`${surname(0)} is away tomorrow`, 'make 3 variations', `max 3 a day for ${surname(1)}`, 'add lab 3 with 32 seats', `${surname(2)} can’t teach on Fridays`];
   const [thinking, setThinking] = useState(false);
   const counter = useRef(1);
   const scroll = useRef<ScrollView>(null);

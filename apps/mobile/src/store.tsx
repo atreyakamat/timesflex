@@ -14,7 +14,8 @@ import {
   hasLearned,
   learnFromChoice,
   learnFromMove,
-  sampleProfile,
+  sampleInstitute,
+  timetableDrift,
   setupProblems,
   solverWeights,
   styleLabel,
@@ -25,6 +26,7 @@ import {
   type InstitutionRecord,
   type NoticeRecord,
   type PublishedTimetable,
+  type TimetableDrift,
   type TimetableUpdate,
   type OperationsData,
   type PreferenceModel,
@@ -34,7 +36,7 @@ import {
   type TimetableRecord,
   type VariantStyle,
 } from '@core';
-import { api, loadToken, setUnauthorizedHandler } from './api';
+import { ApiError, api, loadToken, setUnauthorizedHandler } from './api';
 
 /** The institution profile plus what the assistant has learned about the coordinator. */
 export type Profile = ProfileData & { learning: PreferenceModel; selectedVersionId?: string; published?: PublishedTimetable };
@@ -98,6 +100,12 @@ interface Store {
   /** Who needs telling what, compared with what they last heard. */
   pendingUpdate: TimetableUpdate;
   sessionsNeedingRoom: ScheduledSession[];
+  /** How the live timetable differs from the setup. */
+  drift: TimetableDrift;
+  /** Couldn't reach the server on opening. The login is kept, so it can be tried again. */
+  loadError: string;
+  retryLoad: () => void;
+  dismissLoadError: () => void;
   unplaced: SessionRequest[];
   diagnostics: string[];
   conflicts: Conflict[];
@@ -126,6 +134,10 @@ interface Store {
   saveNow: () => Promise<void>;
   /** Records the pending update, and treats it as what teachers now know. */
   publishUpdate: () => Promise<NoticeRecord | null>;
+  /** Brings the timetable in line with the setup, without moving anything that's still right. */
+  fillTimetable: () => Promise<string>;
+  /** Removes classes, subjects, teachers, rooms and timetables. The account stays. */
+  startOver: (sample?: boolean) => Promise<void>;
   coverUpdate: (date: string) => Promise<NoticeRecord | null>;
   finishOnboarding: () => void;
 }
@@ -134,6 +146,7 @@ const StoreContext = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [account, setAccount] = useState<Account | null>(null);
   const [institutionId, setInstitutionId] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile>(blankProfile());
@@ -187,13 +200,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  useEffect(() => {
-    setUnauthorizedHandler(reset);
+  const load = useCallback(() => {
+    setReady(false);
+    setLoadError('');
     loadToken()
       .then((token) => (token ? api.me().then((session) => open(session, false)) : undefined))
-      .catch(() => reset())
+      .catch((e) => {
+        // A dropped connection isn't being signed out: keep the login and offer to try again.
+        if (e instanceof ApiError && e.status === 401) reset();
+        else setLoadError(e instanceof Error ? e.message : 'Could not reach the server.');
+      })
       .finally(() => setReady(true));
   }, [open, reset]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(reset);
+    load();
+  }, [load, reset]);
 
   // Autosave the profile, operations and hand edits, each a moment after the last change.
   useEffect(() => {
@@ -285,6 +308,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const liveSessions = useMemo(() => (live ? (live.id === currentId ? sessions : live.generatedSessions) : []), [live, currentId, sessions]);
   const pendingUpdate = useMemo(() => buildTimetableUpdate({ published: profile.published, sessions: liveSessions, profile, slots }), [profile, liveSessions, slots]);
   const sessionsNeedingRoom = useMemo(() => sessionsWithoutRoom(liveSessions, profile.rooms), [liveSessions, profile.rooms]);
+  const drift = useMemo(() => timetableDrift(profile, liveSessions), [profile, liveSessions]);
 
   const update = useCallback((change: (profile: Profile) => Profile) => {
     profileDirty.current = true;
@@ -424,6 +448,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     liveVersion: live ?? null,
     pendingUpdate,
     sessionsNeedingRoom,
+    drift,
+    loadError,
+    retryLoad: load,
+    dismissLoadError: () => {
+      setLoadError('');
+      reset();
+    },
     unplaced,
     diagnostics,
     conflicts,
@@ -440,7 +471,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     update,
     updateOperations,
     loadSample: () => {
-      const sample = sampleProfile();
+      const sample = sampleInstitute();
       update((p) => ({ ...p, ...sample, institution: { ...sample.institution, name: p.institution.name || sample.institution.name, type: p.institution.type } }));
     },
     applyAgent,
@@ -504,6 +535,69 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return result.unfixed;
     },
     saveNow,
+    fillTimetable: async () => {
+      if (!institutionId || !live) throw new Error('There is no timetable to update yet.');
+      await saveNow();
+      const wasApproved = live.status === 'approved';
+      const { kept, missing, stale, reassigned } = timetableDrift(profile, liveSessions);
+      const { sessions: settled } = repairRooms(kept, profile.rooms, slots);
+      const removed = stale.length ? ` Removed ${stale.length}.` : '';
+      const newTeacher = reassigned ? ` Updated the teacher on ${reassigned}.` : '';
+      if (!missing) {
+        const saved = await api.updateTimetable(live.id, { generatedSessions: settled });
+        setVersions((list) => list.map((v) => (v.id === saved.id ? saved : v)));
+        show(saved);
+        return `Timetable updated.${removed}${newTeacher}`;
+      }
+      setBusy('Adding the new classes…');
+      try {
+        const wasLocked = new Set(settled.filter((s) => s.locked).map((s) => s.id));
+        const request = buildSolverRequest({
+          days,
+          slots,
+          divisions: profile.divisions,
+          teachers: profile.teachers,
+          rooms: profile.rooms,
+          subjects: profile.subjects,
+          locked: settled,
+          style: 'balanced',
+          timeLimitSeconds: 8,
+        });
+        const label = `${live.label.replace(/ \(updated\)$/, '')} (updated)`;
+        const record = await api.createTimetable(institutionId, { label, request });
+        const { solver } = await api.solve(record.id);
+        // Pins were only there for this search: they shouldn't show as locks afterwards.
+        const placed = solver.scheduled_sessions.map((s) => ({ ...s, locked: wasLocked.has(s.id) }));
+        const saved = await api.updateTimetable(record.id, { generatedSessions: placed, status: wasApproved ? 'approved' : 'edited' });
+        const previous = wasApproved ? await api.updateTimetable(live.id, { status: 'edited' }) : live;
+        setVersions((list) => [saved, ...list.map((v) => (v.id === previous.id ? previous : v))]);
+        show(saved, solver.unscheduled_sessions, solver.diagnostics ?? []);
+        update((p) => ({ ...p, selectedVersionId: saved.id }));
+        const added = placed.length - settled.length;
+        return solver.unscheduled_sessions.length
+          ? `Added ${added}, but ${solver.unscheduled_sessions.length} couldn’t fit. See the notes.${removed}`
+          : `Added ${added} new class${added === 1 ? '' : 'es'}. Everything else stayed where it was.${removed}${newTeacher}`;
+      } finally {
+        setBusy(null);
+      }
+    },
+    startOver: async (sample) => {
+      if (!institutionId) return;
+      await api.clearInstitution(institutionId);
+      setVersions([]);
+      setCurrentId(null);
+      setSessions([]);
+      setUnplaced([]);
+      setDiagnostics([]);
+      sessionsDirty.current = false;
+      const name = profile.institution.name;
+      const type = profile.institution.type;
+      const fresh = sample ? ({ ...blankProfile(name, type), ...sampleInstitute() } as Profile) : blankProfile(name, type);
+      const next = { ...fresh, institution: { ...fresh.institution, name, type } };
+      setProfile(next);
+      profileDirty.current = false;
+      await persistProfile(next);
+    },
     publishUpdate: async () => {
       if (!institutionId || !live || !pendingUpdate.recipients.length) return null;
       await saveNow();
