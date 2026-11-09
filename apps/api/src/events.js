@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid';
 
+import { operationsOf } from './attendance.js';
 import { createRateLimiter } from './auth.js';
 import { profileOf } from './members.js';
 
@@ -75,6 +76,8 @@ export const mountEvents = (app, { store, route, fail, memberAccess, limits = {}
         students: (students ?? []).map((s) => ({ id: s.id, rollNo: s.rollNo, name: s.name, ...(s.batch ? { batch: s.batch } : {}) })),
       })),
       sessions: timetables.find((t) => t.status === 'approved')?.generatedSessions ?? [],
+      // Only the classes this teacher has been asked to cover, so they can take that register.
+      covering: (operationsOf(access.institution).substitutions ?? []).filter((item) => access.teacherId && item.substituteTeacherId === access.teacherId).map(({ id, date, sessionId, absentTeacherId, substituteTeacherId }) => ({ id, date, sessionId, absentTeacherId, substituteTeacherId })),
     });
   }));
 

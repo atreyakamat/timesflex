@@ -11,6 +11,10 @@ export interface InstitutionForm {
   slotDurationMinutes: number;
   breakAfterSlots: number | null;
   breakDurationMinutes: number | null;
+  /** How long after a student's first class starts a gate scan counts as late. Default 10. */
+  lateAfterMinutes?: number;
+  /** IANA name, used to read scan times. Default Asia/Kolkata. */
+  timezone?: string;
   /** Printed on exports, e.g. "2026-27". */
   academicYear?: string;
   address?: string;

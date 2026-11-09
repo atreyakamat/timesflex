@@ -32,6 +32,7 @@
       "expo-secure-store",
       "expo-font",
       "expo-asset",
+      ["expo-camera", { "cameraPermission": "TimeFlex uses the camera to scan student cards.", "barcodeScannerEnabled": true, "recordAudioAndroid": false }],
       ["expo-build-properties", { "android": { "usesCleartextTraffic": true } }]
     ],
     "scheme": "timeflex",

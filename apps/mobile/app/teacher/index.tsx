@@ -1,7 +1,7 @@
 import { Redirect, router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { describeEvent, sessionsOnDay, toDateKey, weekdayOf, type StudentEvent } from '@core';
+import { describeEvent, effectiveTeacher, findAttendance, sessionsOnDay, toDateKey, weekdayOf, type StudentEvent } from '@core';
 import { api } from '../../src/api';
 import { useStore } from '../../src/store';
 import { space, useTheme } from '../../src/theme';
@@ -18,7 +18,7 @@ export default function TeacherHome() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const today = toDateKey(new Date());
-  const mine = sessionsOnDay(liveSessions, weekdayOf(today), slots).filter((s) => s.teacher_id === teacherId);
+  const mine = sessionsOnDay(liveSessions, weekdayOf(today), slots).filter((s) => s.teacher_id === teacherId || effectiveTeacher(s, today, profile.operations.substitutions) === teacherId);
 
   const load = useCallback(() => {
     if (!institutionId) return;
@@ -44,13 +44,19 @@ export default function TeacherHome() {
         <Button label="Theme" kind="ghost" size="sm" onPress={toggle} />
       </Row>
 
-      <Button label="Mark a student" icon="create-outline" size="lg" full onPress={() => router.push('/mark')} />
+      <View style={{ gap: space.sm }}>
+        <Button label="Mark a student" icon="create-outline" size="lg" full onPress={() => router.push('/mark')} />
+        <Row gap={8}>
+          <Button label="Attendance" kind="secondary" icon="checkbox-outline" style={{ flex: 1 }} onPress={() => router.push('/attendance')} />
+          <Button label="Scan cards" kind="secondary" icon="qr-code-outline" style={{ flex: 1 }} onPress={() => router.push('/scan')} />
+        </Row>
+      </View>
 
       <SectionTitle title="Your classes today" />
       {mine.length ? (
         <View style={{ gap: space.sm }}>
           {mine.map((s) => (
-            <Card key={s.id} style={{ paddingVertical: space.md }}>
+            <Card key={s.id} onPress={() => router.push({ pathname: '/attendance', params: { date: today, session: s.id } })} style={{ paddingVertical: space.md }}>
               <Row gap={12}>
                 <T v="mono" style={{ width: 44 }}>
                   {s.slot.split('-')[0]}
@@ -60,8 +66,10 @@ export default function TeacherHome() {
                   <T v="small">
                     {names[s.division_id] ?? ''}
                     {s.batch ? ` ${s.batch}` : ''} · {names[s.room_id] ?? ''}
+                    {s.teacher_id !== teacherId ? ' · covering' : ''}
                   </T>
                 </View>
+                <Pill label={findAttendance(profile.operations.attendance, today, s.id) ? 'Taken' : 'Take register'} tone={findAttendance(profile.operations.attendance, today, s.id) ? 'ok' : undefined} />
               </Row>
             </Card>
           ))}

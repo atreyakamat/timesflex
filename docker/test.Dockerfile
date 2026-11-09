@@ -10,6 +10,7 @@ RUN npm ci --no-audit --no-fund
 COPY apps/api apps/api
 COPY apps/web apps/web
 COPY packages/core packages/core
+COPY plugins plugins
 COPY services/solver services/solver
 RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -c services/solver/constraints.txt ./services/solver pytest
 COPY docker/run-tests.sh /run-tests.sh

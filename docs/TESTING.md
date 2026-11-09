@@ -21,6 +21,7 @@ Run the last two against a running server:
 ```bash
 APP_URL=http://localhost:8080 node scripts/e2e.mjs
 APP_URL=http://localhost:8080 node scripts/e2e-roles.mjs
+# Last: it floods sign-ups on purpose, so other tests that sign up are refused for an hour unless the API restarts.
 TARGET=http://localhost:8080 npm run test:security
 ```
 

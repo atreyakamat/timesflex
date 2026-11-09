@@ -240,6 +240,52 @@ try {
   await has('Bunked: 1 student saved');
   check('any teacher can flag a student as bunking', true);
 
+  /* ---------- A teacher takes attendance, and scans a card ---------- */
+  const collegeId = (await apiCall('GET', '/api/auth/me', teacherToken)).json.institution.id;
+  const room = (await apiCall('GET', `/api/institutions/${collegeId}/classroom`, teacherToken)).json;
+  const ownClass = room.sessions.find((s) => s.teacher_id === room.teacherId && room.divisions.find((d) => d.id === s.division_id)?.students.length);
+  const classStudents = room.divisions.find((d) => d.id === ownClass.division_id).students;
+  // The date this class last happened, so this works on any day of the week.
+  const WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const back = (new Date().getDay() - WEEK.indexOf(ownClass.day) + 7) % 7;
+  const pad = (n) => String(n).padStart(2, '0');
+  const classDay = new Date(Date.now() - back * 86400000);
+  const classDate = `${classDay.getFullYear()}-${pad(classDay.getMonth() + 1)}-${pad(classDay.getDate())}`;
+  await go(`${APP}/attendance?date=${classDate}&session=${ownClass.id}`);
+  await has('Tap the students who are absent');
+  check('a teacher opens the register for their own class', true);
+  await waitFor(`document.querySelectorAll('[role="checkbox"]').length > 0`);
+  await ev(`document.querySelectorAll('[role="checkbox"]')[0].click()`);
+  await has('Save · 1 absent');
+  await shot('r5a-teacher-attendance');
+  await click('Save · 1 absent');
+  await has('Saved ✓');
+  const register = await apiCall('GET', `/api/institutions/${collegeId}/attendance?date=${classDate}`, teacherToken);
+  check('the teacher’s register is saved on the server', register.json.length === 1 && register.json[0].absentStudentIds.length === 1 && register.json[0].takenByName !== undefined);
+  await go(`${APP}/attendance?date=${classDate}&session=${ownClass.id}`);
+  await has('Save · 1 absent');
+  check('coming back to the register shows what was saved', true);
+
+  await go(`${APP}/scan`);
+  await has('Scan cards');
+  check('without https the browser explains why there’s no camera', APP.startsWith('https') || APP.includes('localhost') || (await seen('secure (https)')));
+  await type('e.g. SYA01', classStudents[0].rollNo);
+  await ev(`[...document.querySelectorAll('input')].find((i) => i.placeholder === 'e.g. SYA01').focus()`);
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await has(classStudents[0].name);
+  check('typing a roll number, as a handheld scanner does, finds the student', true);
+  await type('e.g. SYA01', 'NOBODY-HERE');
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await has('Not recognised');
+  check('an unknown card says so plainly', true);
+  await shot('r5b-teacher-scan');
+
+  await go(`${APP}/devices`);
+  await sleep(1500);
+  check('a teacher can’t see device keys', !(await seen('Main gate')));
+
   /* ---------- Office review ---------- */
   await signOutBrowser();
   await ev(`localStorage.setItem('timeflex.session', ${JSON.stringify(adminToken)})`);
@@ -258,12 +304,40 @@ try {
   await has('Times late');
   await has('Spoke to the student');
   check('a student’s record shows the flag and outcome', await seen('Bunked a class'));
-  check('no attendance yet reads as a dash, not null', !(await seen('null')));
+  check('attendance never reads as null', !(await seen('null')));
   await shot('r7-student-record');
+
+  /* ---------- Cards and devices ---------- */
+  await go(`${APP}/cards`);
+  await has('Student cards');
+  await waitFor(`document.querySelectorAll('svg path').length > 0 && __has('Print this class')`);
+  check('the office sees a QR card for each student', await ev(`[...document.querySelectorAll('[aria-label="QR code"] path')].length > 3`));
+  await shot('r7a-cards');
+  // Catch what would have gone to the printer, rather than opening a real print window.
+  await ev(`(() => { window.open = () => ({ document: { write: (html) => { window.__sheet = html; }, close() {} }, focus() {}, print() { window.__printed = true; } }); return true; })()`);
+  await click(await ev(`[...document.querySelectorAll('[role="button"]')].map((x) => x.textContent.trim()).find((t) => t.startsWith('Print everyone'))`));
+  await waitFor('window.__printed === true');
+  check('the print sheet has a card for everyone', (await ev(`window.__sheet.match(/class="card"/g).length`)) === room.divisions.reduce((sum, d) => sum + d.students.length, 0));
+
+  await go(`${APP}/devices`);
+  await has('Add a device');
+  await type('e.g. Main gate', 'Main gate');
+  await click('Add and show its key');
+  await has('Key for Main gate');
+  const deviceKey = await ev(`[...document.querySelectorAll('input')].map((i) => i.value).find((v) => v.startsWith('tfd_'))`);
+  check('adding a device shows its key', /^tfd_/.test(deviceKey ?? ''));
+  await shot('r7b-devices');
+  const firstInClass = classStudents[1] ?? classStudents[0];
+  const sent = await apiCall('POST', '/api/device/v1/scans', deviceKey, { scans: [{ identifier: firstInClass.rollNo, scanId: 'e2e-1' }, { identifier: 'NOT-A-STUDENT', scanId: 'e2e-2' }] });
+  check('a device sends scans with its key', sent.status === 200 && sent.json.accepted === 1 && sent.json.unmatched[0] === 'NOT-A-STUDENT', JSON.stringify(sent.json));
+  await go(`${APP}/devices`);
+  await has('Last seen');
+  check('the office sees the device is alive, and what it couldn’t match', await seen('NOT-A-STUDENT'));
+  check('the key isn’t shown again', !(await seen('tfd_')));
 
   /* ---------- Phone ---------- */
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-  for (const page of ['students', 'mark', 'access']) {
+  for (const page of ['students', 'mark', 'access', 'attendance', 'cards', 'devices', 'scan']) {
     await go(`${APP}/${page}`);
     await sleep(600);
     check(`${page} fits a phone`, (await ev(`document.documentElement.scrollWidth - innerWidth`)) <= 0);

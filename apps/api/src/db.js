@@ -91,6 +91,33 @@ CREATE TABLE IF NOT EXISTS student_events (
 CREATE INDEX IF NOT EXISTS student_events_institution ON student_events (institution_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS student_events_student ON student_events (institution_id, student_id);
 
+CREATE TABLE IF NOT EXISTS attendance (
+  institution_id TEXT NOT NULL REFERENCES institutions (id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  data JSONB NOT NULL,
+  PRIMARY KEY (institution_id, date, session_id)
+);
+
+CREATE TABLE IF NOT EXISTS scans (
+  institution_id TEXT NOT NULL REFERENCES institutions (id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  data JSONB NOT NULL,
+  PRIMARY KEY (institution_id, id)
+);
+CREATE INDEX IF NOT EXISTS scans_day ON scans (institution_id, date);
+
+CREATE TABLE IF NOT EXISTS devices (
+  id TEXT PRIMARY KEY,
+  institution_id TEXT NOT NULL REFERENCES institutions (id) ON DELETE CASCADE,
+  key_hash TEXT NOT NULL UNIQUE,
+  data JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS devices_institution ON devices (institution_id);
+
+ALTER TABLE institutions ADD COLUMN IF NOT EXISTS card_secret TEXT;
+
 CREATE TABLE IF NOT EXISTS message_links (
   message_id TEXT PRIMARY KEY,
   notice_id TEXT NOT NULL REFERENCES notices (id) ON DELETE CASCADE,
@@ -144,6 +171,8 @@ const toInvite = (row) => ({
 });
 const toEvent = (row) => ({ ...row.data, id: row.id, institutionId: row.institution_id });
 
+const toDevice = (row) => ({ ...row.data, id: row.id, institutionId: row.institution_id });
+const MAX_SCANS = 20000;
 const MAX_EVENTS = 2000;
 /** The same filtering for both stores. */
 const matchesEvent = ({ studentId, kind, status, date, recordedBy }) => (event) =>
@@ -275,6 +304,55 @@ export const createPgStore = async (connectionString) => {
         [institutionId, filters.studentId ?? null],
       );
       return result.rows.map(toEvent).filter(matchesEvent(filters));
+    },
+    async upsertAttendance(institutionId, record) {
+      await pool.query(
+        `INSERT INTO attendance (institution_id, date, session_id, data) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (institution_id, date, session_id) DO UPDATE SET data = $4`,
+        [institutionId, record.date, record.sessionId, JSON.stringify(record)],
+      );
+    },
+    async listAttendance(institutionId, { date } = {}) {
+      const result = await pool.query('SELECT data FROM attendance WHERE institution_id = $1 AND ($2::text IS NULL OR date = $2) ORDER BY date DESC', [institutionId, date ?? null]);
+      return result.rows.map((row) => row.data);
+    },
+    async clearAttendance(institutionId) {
+      await pool.query('DELETE FROM attendance WHERE institution_id = $1', [institutionId]);
+      await pool.query('DELETE FROM scans WHERE institution_id = $1', [institutionId]);
+    },
+    async addScan(institutionId, scan) {
+      const result = await pool.query('INSERT INTO scans (institution_id, id, date, data) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [institutionId, scan.id, scan.date, JSON.stringify(scan)]);
+      return result.rowCount === 1;
+    },
+    async listScans(institutionId, { date }) {
+      const result = await pool.query(`SELECT data FROM scans WHERE institution_id = $1 AND date = $2 LIMIT ${MAX_SCANS}`, [institutionId, date]);
+      return result.rows.map((row) => row.data).sort((a, b) => a.at.localeCompare(b.at));
+    },
+    async createDevice({ id, institutionId, keyHash, ...rest }) {
+      await pool.query('INSERT INTO devices (id, institution_id, key_hash, data) VALUES ($1, $2, $3, $4)', [id, institutionId, keyHash, JSON.stringify(rest)]);
+      return { id, institutionId, ...rest };
+    },
+    async getDeviceByKeyHash(keyHash) {
+      const result = await pool.query('SELECT * FROM devices WHERE key_hash = $1', [keyHash]);
+      return result.rows[0] ? toDevice(result.rows[0]) : null;
+    },
+    async listDevices(institutionId) {
+      const result = await pool.query('SELECT * FROM devices WHERE institution_id = $1', [institutionId]);
+      return result.rows.map(toDevice).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    },
+    async updateDevice(id, patch) {
+      await pool.query('UPDATE devices SET data = data || $2::jsonb WHERE id = $1', [id, JSON.stringify(patch)]);
+    },
+    async deleteDevice(id, institutionId) {
+      await pool.query('DELETE FROM devices WHERE id = $1 AND institution_id = $2', [id, institutionId]);
+    },
+    /** The college's card signing secret, made the first time it's needed. Two requests agree on one. */
+    async getCardSecret(id, fresh) {
+      const result = await pool.query('UPDATE institutions SET card_secret = COALESCE(card_secret, $2) WHERE id = $1 RETURNING card_secret', [id, fresh]);
+      return result.rows[0]?.card_secret ?? fresh;
+    },
+    async setCardSecret(id, secret) {
+      await pool.query('UPDATE institutions SET card_secret = $2 WHERE id = $1', [id, secret]);
     },
     async listAllInstitutions() {
       const result = await pool.query('SELECT * FROM institutions ORDER BY created_at DESC');
@@ -436,11 +514,15 @@ export const createFileStore = async (filePath) => {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  state = { accounts: [], sessions: [], institutions: [], timetables: [], notices: [], messageLinks: [], memberships: [], invites: [], events: [], ...state };
+  state = { accounts: [], sessions: [], institutions: [], timetables: [], notices: [], messageLinks: [], memberships: [], invites: [], events: [], attendance: [], scans: [], devices: [], cardSecrets: {}, ...state };
   const dropNoticesOf = (ids) => {
     state.memberships = state.memberships.filter((item) => !ids.has(item.institutionId));
     state.invites = state.invites.filter((item) => !ids.has(item.institutionId));
     state.events = state.events.filter((item) => !ids.has(item.institutionId));
+    state.attendance = state.attendance.filter((item) => !ids.has(item.institutionId));
+    state.scans = state.scans.filter((item) => !ids.has(item.institutionId));
+    state.devices = state.devices.filter((item) => !ids.has(item.institutionId));
+    for (const id of ids) delete state.cardSecrets[id];
     const gone = new Set(state.notices.filter((item) => ids.has(item.institutionId)).map((item) => item.id));
     state.notices = state.notices.filter((item) => !gone.has(item.id));
     state.messageLinks = state.messageLinks.filter((item) => !gone.has(item.noticeId));
@@ -538,6 +620,60 @@ export const createFileStore = async (filePath) => {
           .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
           .slice(0, MAX_EVENTS),
       );
+    },
+    async upsertAttendance(institutionId, record) {
+      state.attendance = state.attendance.filter((item) => !(item.institutionId === institutionId && item.record.date === record.date && item.record.sessionId === record.sessionId));
+      state.attendance.push({ institutionId, record: structuredClone(record) });
+      await persist();
+    },
+    async listAttendance(institutionId, { date } = {}) {
+      return clone(state.attendance.filter((item) => item.institutionId === institutionId && (!date || item.record.date === date)).map((item) => item.record));
+    },
+    async clearAttendance(institutionId) {
+      state.attendance = state.attendance.filter((item) => item.institutionId !== institutionId);
+      state.scans = state.scans.filter((item) => item.institutionId !== institutionId);
+      await persist();
+    },
+    async addScan(institutionId, scan) {
+      if (state.scans.some((item) => item.institutionId === institutionId && item.scan.id === scan.id)) return false;
+      state.scans.push({ institutionId, scan: structuredClone(scan) });
+      await persist();
+      return true;
+    },
+    async listScans(institutionId, { date }) {
+      return clone(state.scans.filter((item) => item.institutionId === institutionId && item.scan.date === date).map((item) => item.scan).sort((a, b) => a.at.localeCompare(b.at)));
+    },
+    async createDevice(device) {
+      state.devices.push(structuredClone(device));
+      await persist();
+      const { keyHash: _keyHash, ...rest } = device;
+      return clone(rest);
+    },
+    async getDeviceByKeyHash(keyHash) {
+      return clone(state.devices.find((item) => item.keyHash === keyHash));
+    },
+    async listDevices(institutionId) {
+      return clone(state.devices.filter((item) => item.institutionId === institutionId));
+    },
+    async updateDevice(id, patch) {
+      const record = state.devices.find((item) => item.id === id);
+      if (record) Object.assign(record, patch);
+      await persist();
+    },
+    async deleteDevice(id, institutionId) {
+      state.devices = state.devices.filter((item) => !(item.id === id && item.institutionId === institutionId));
+      await persist();
+    },
+    async getCardSecret(id, fresh) {
+      if (!state.cardSecrets[id]) {
+        state.cardSecrets[id] = fresh;
+        await persist();
+      }
+      return state.cardSecrets[id];
+    },
+    async setCardSecret(id, secret) {
+      state.cardSecrets[id] = secret;
+      await persist();
     },
     async listAllInstitutions() {
       return clone([...state.institutions].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));

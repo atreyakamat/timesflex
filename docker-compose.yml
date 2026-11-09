@@ -169,7 +169,24 @@ services:
     depends_on:
       - web
 
+  # Connects fingerprint machines: docker compose --profile bridge up -d bridge
+  # Run this on the college's network. See plugins/biometric-bridge/README.md.
+  bridge:
+    build: plugins/biometric-bridge
+    profiles: ["bridge"]
+    restart: unless-stopped
+    environment:
+      TIMEFLEX_URL: ${TIMEFLEX_URL:-http://web:8080}
+      TIMEFLEX_DEVICE_KEY: ${TIMEFLEX_DEVICE_KEY:-}
+      COLLEGE_UTC_OFFSET: ${COLLEGE_UTC_OFFSET:-+05:30}
+      ALLOWED_SERIALS: ${ALLOWED_SERIALS:-}
+    ports:
+      - "${BRIDGE_BIND:-127.0.0.1}:8081:8081"
+    volumes:
+      - bridge:/data
+
 volumes:
+  bridge:
   backups:
   db:
   ollama:

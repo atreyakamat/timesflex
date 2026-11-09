@@ -29,7 +29,7 @@ RUN npx expo prebuild --platform android --no-install
 WORKDIR /repo/apps/mobile/android
 ENV GRADLE_OPTS="-Djava.net.preferIPv4Stack=true -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000 -Dorg.gradle.internal.repository.max.retries=5"
 RUN sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties \
-  && (./gradlew --version || (sleep 20 && ./gradlew --version) || (sleep 60 && ./gradlew --version))
+  && for wait in 0 20 60 120 240 480; do sleep $wait; ./gradlew --version && exit 0; echo "Gradle download failed, trying again"; done; exit 1
 RUN ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
 # Fail here, not on someone's phone, if the APK cannot be installed.

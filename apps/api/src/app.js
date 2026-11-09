@@ -20,7 +20,9 @@ import {
   verifyAgainstDummy,
   verifyPassword,
 } from './auth.js';
+import { mergeAttendance, mountAttendance, olderOnly, withAttendance } from './attendance.js';
 import { DuplicateEmailError } from './db.js';
+import { mountDeviceApi, mountDevices } from './devices.js';
 import { interpretCommand } from './intent.js';
 import { mountEvents } from './events.js';
 import { mountJoin, mountMembers } from './members.js';
@@ -100,7 +102,7 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
       account: publicAccount(account),
       role,
       ...(membership?.teacherId ? { teacherId: membership.teacherId } : {}),
-      institution: usable ? publicInstitution(institution) : brief,
+      institution: usable ? publicInstitution(await withAttendance(store, institution)) : brief,
     };
   };
 
@@ -256,6 +258,8 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
     return null;
   };
 
+  mountDeviceApi(app, { store, route, fail, limits });
+
   /* ---------- Everything below needs a session ---------- */
 
   app.use('/api', requireAuth);
@@ -293,7 +297,7 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   app.get('/api/institutions/:id', route(async (request, response) => {
     const institution = await ownedInstitution(request, request.params.id);
     if (!institution) return notFound(response, 'Institution');
-    response.json(publicInstitution(institution));
+    response.json(publicInstitution(await withAttendance(store, institution)));
   }));
 
   app.put('/api/institutions/:id', route(async (request, response) => {
@@ -317,13 +321,14 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
     if (![absences, substitutions, attendance].every(Array.isArray)) {
       return fail(response, 400, 'absences, substitutions and attendance must be arrays');
     }
-    const operations = { absences, substitutions, attendance };
+    // Attendance has its own table now. A screen saving its older copy can't undo a teacher's register.
+    const { older, stored } = await olderOnly(store, existing.id, attendance);
     await store.updateInstitution(existing.id, {
       name: existing.name,
       type: existing.type,
-      data: { ...(existing.data ?? {}), operations },
+      data: { ...(existing.data ?? {}), operations: { absences, substitutions, attendance: older } },
     });
-    response.json(operations);
+    response.json({ absences, substitutions, attendance: mergeAttendance(older, stored) });
   }));
 
   app.delete('/api/institutions/:id', route(async (request, response) => {
@@ -338,6 +343,10 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
     if (!institution) return notFound(response, 'Institution');
     await store.pruneNotices(institution.id, 0);
     await store.deleteTimetables(institution.id);
+    await store.clearAttendance(institution.id);
+    // Saved separately from the setup, so clearing the setup alone would leave them behind.
+    const data = institution.data ?? {};
+    await store.updateInstitution(institution.id, { name: institution.name, type: institution.type, data: { ...data, operations: { absences: [], substitutions: [], attendance: [] } } });
     response.json({ success: true });
   }));
 
@@ -444,6 +453,8 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   mountNotices(app, { store, route, fail, ownedInstitution, limits, ...(send && { send }) });
   mountMembers(app, { store, route, fail, ownedInstitution });
   mountEvents(app, { store, route, fail, memberAccess, ownedInstitution, limits });
+  mountAttendance(app, { store, route, fail, memberAccess });
+  mountDevices(app, { store, route, fail, memberAccess, ownedInstitution, limits });
   mountPlatform(app, { store, route, fail });
 
   app.use('/api', (request, response) => notFound(response, 'Page'));

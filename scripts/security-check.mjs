@@ -98,6 +98,38 @@ for (const [name, method, url, body] of [
 }
 const stranger = await call('POST', `${inst}/notices`, { token: alice.token, body: { ...noticeBody, recipients: [{ teacherId: 'someone-else', text: 'spam', summary: 'spam' }] } });
 check('messages only go to the college’s own teachers', stranger.status === 400, stranger.status);
+// Attendance, cards and devices: another college, and no key.
+for (const [method, url, body] of [
+  ['GET', `${inst}/attendance`],
+  ['POST', `${inst}/attendance`, { date: new Date().toISOString().slice(0, 10), sessionId: 'x', absentStudentIds: [] }],
+  ['GET', `${inst}/cards`],
+  ['POST', `${inst}/cards/rotate`, {}],
+  ['POST', `${inst}/scans`, { identifier: 'x' }],
+  ['GET', `${inst}/scans`],
+  ['GET', `${inst}/devices`],
+  ['POST', `${inst}/devices`, { name: 'x', kind: 'gate' }],
+]) {
+  const r = await call(method, url, { token: mallory.token, ...(body ? { body } : {}) });
+  check(`another college can’t ${method} ${url.split('/').slice(4).join('/')}`, r.status === 404, r.status);
+}
+const gate = await call('POST', `${inst}/devices`, { token: alice.token, body: { name: 'Gate', kind: 'gate' } });
+const reader = await call('POST', `${inst}/devices`, { token: alice.token, body: { name: 'ERP', kind: 'integration' } });
+check('a device key is only shown when made', /^tfd_/.test(gate.json?.key ?? '') && !JSON.stringify((await call('GET', `${inst}/devices`, { token: alice.token })).json).includes('tfd_'));
+const deviceScan = (token, body = { scans: [{ identifier: 'x' }] }) => call('POST', '/api/device/v1/scans', { ...(token ? { token } : {}), body });
+check('no key, no scans', (await deviceScan()).status === 401);
+check('a made-up key is refused', (await deviceScan(`tfd_${'A'.repeat(43)}`)).status === 401);
+check('a login token isn’t a device key', (await deviceScan(alice.token)).status === 401);
+check('a read key can’t write scans', (await deviceScan(reader.json.key)).status === 403);
+check('a scan key can’t read students', (await call('GET', '/api/integration/v1/students', { token: gate.json.key })).status === 403);
+check('nothing is readable without a key', (await call('GET', '/api/integration/v1/students')).status === 401);
+check('a flood of scans in one request is refused', (await deviceScan(gate.json.key, { scans: Array.from({ length: 501 }, () => ({ identifier: 'x' })) })).status === 400);
+check('an oversized scan upload is refused', (await deviceScan(gate.json.key, { scans: [{ identifier: 'x'.repeat(400000) }] })).status === 413);
+const injected = await deviceScan(gate.json.key, { scans: [{ identifier: "' OR 1=1; DROP TABLE scans; --" }] });
+check('database tricks in a scan are just an unknown ID', injected.status === 200 && injected.json.unmatched.length === 1, injected.status);
+const forgedCard = await call('POST', `${inst}/scans`, { token: alice.token, body: { identifier: `TF1.s1.${'A'.repeat(22)}` } });
+check('a forged card isn’t accepted', forgedCard.json?.matched === false, forgedCard.status);
+await call('DELETE', `${inst}/devices/${gate.json.id}`, { token: alice.token });
+check('a removed key stops at once', (await deviceScan(gate.json.key)).status === 401);
 const otherEvent = await call('POST', `${inst}/events`, { token: mallory.token, body: { studentId: 's', kind: 'bunked', date: new Date().toISOString().slice(0, 10) } });
 check('cannot flag a student in another college', otherEvent.status === 404, otherEvent.status);
 const otherRoom = await call('GET', `${inst}/classroom`, { token: mallory.token });

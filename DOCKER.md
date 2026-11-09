@@ -81,6 +81,15 @@ docker compose exec api node src/make-central-admin.js you@example.com
 
 To run invitation-only, set `ALLOW_SIGNUP=false` in `.env` and run `./deploy.sh` again.
 
+## Attendance, cards and devices
+
+Teachers take the register for their own classes, and for classes they've been asked to cover. Under **More** the office can print QR student cards, scan them with a phone or handheld scanner, and connect devices:
+
+- **Fingerprint or face machines:** run the bridge on the college's network with `docker compose --profile bridge up -d bridge`. See [the bridge's guide](plugins/biometric-bridge/README.md). It hasn't been tried on real hardware yet, so test one machine first.
+- **Your own readers and other software:** see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
+
+A browser only opens the camera on https or localhost. On a plain `http://100.x` address, scan with the phone app or a handheld scanner, or put the site behind the https profile.
+
 ## Someone forgot their password
 
 There's no e-mail reset yet. Run this on the server and pass on the temporary password it prints:

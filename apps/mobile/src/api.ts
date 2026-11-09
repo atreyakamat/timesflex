@@ -15,6 +15,10 @@ import type {
   TimetableUpdate,
   EventKind,
   StudentEvent,
+  AttendanceRecord,
+  ScanRecord,
+  StudentCard,
+  Substitution,
 } from '@core';
 import type { ModelIntent } from '@core';
 import { storage } from './storage';
@@ -172,7 +176,16 @@ export interface Classroom {
   rooms: { id: string; name: string }[];
   divisions: { id: string; name: string; batches: string[]; size?: number; students: { id: string; rollNo: string; name: string; batch?: string }[] }[];
   sessions: unknown[];
+  covering?: Substitution[];
 }
+export interface DeviceRow {
+  id: string;
+  name: string;
+  kind: 'gate' | 'classroom' | 'integration';
+  lastSeenAt: string | null;
+  unmatched: string[];
+}
+export type ScanResult = { matched: false } | { matched: true; duplicate: boolean; student: { id: string; name: string; rollNo: string; divisionId: string; divisionName: string } };
 
 /** A link someone can tap to accept an invite: this page's address, or the server the app uses. */
 export const joinLink = (code: string) => {
@@ -193,6 +206,15 @@ export const api = {
   createEvent: (id: string, body: { studentId: string; kind: EventKind; date: string; time?: string; slot?: string; minutesLate?: number; note?: string }) => request<StudentEvent>(`/api/institutions/${id}/events`, { method: 'POST', body }),
   reviewEvent: (eventId: string, body: { status: 'open' | 'reviewed'; outcome?: string }) => request<StudentEvent>(`/api/events/${eventId}`, { method: 'PUT', body }),
   voidEvent: (eventId: string, reason?: string) => request<StudentEvent>(`/api/events/${eventId}/void`, { method: 'POST', body: { ...(reason ? { reason } : {}) } }),
+  takeAttendance: (id: string, body: { date: string; sessionId: string; absentStudentIds: string[] }) => request<AttendanceRecord>(`/api/institutions/${id}/attendance`, { method: 'POST', body }),
+  listAttendance: (id: string) => request<AttendanceRecord[]>(`/api/institutions/${id}/attendance`),
+  listCards: (id: string) => request<StudentCard[]>(`/api/institutions/${id}/cards`),
+  rotateCards: (id: string) => request(`/api/institutions/${id}/cards/rotate`, { method: 'POST', body: {} }),
+  scan: (id: string, identifier: string, purpose: 'class' | 'gate') => request<ScanResult>(`/api/institutions/${id}/scans`, { method: 'POST', body: { identifier, purpose } }),
+  listScans: (id: string, date: string) => request<ScanRecord[]>(`/api/institutions/${id}/scans?date=${encodeURIComponent(date)}`),
+  listDevices: (id: string) => request<DeviceRow[]>(`/api/institutions/${id}/devices`),
+  createDevice: (id: string, body: { name: string; kind: DeviceRow['kind'] }) => request<DeviceRow & { key: string }>(`/api/institutions/${id}/devices`, { method: 'POST', body }),
+  deleteDevice: (id: string, deviceId: string) => request(`/api/institutions/${id}/devices/${deviceId}`, { method: 'DELETE' }),
   listInvites: (id: string) => request<InviteRow[]>(`/api/institutions/${id}/invites`),
   createInvite: (id: string, teacherId: string) => request<{ id: string; code: string }>(`/api/institutions/${id}/invites`, { method: 'POST', body: { teacherId } }),
   listMembers: (id: string) => request<MemberRow[]>(`/api/institutions/${id}/members`),

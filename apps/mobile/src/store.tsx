@@ -123,6 +123,8 @@ interface Store {
   signOut: () => Promise<void>;
   update: (change: (profile: Profile) => Profile) => void;
   updateOperations: (change: (ops: OperationsData) => OperationsData) => void;
+  /** Saves a register straight away, for teachers and the office alike. */
+  takeAttendance: (date: string, session: ScheduledSession, absentStudentIds: string[]) => Promise<void>;
   loadSample: () => void;
   /** Apply what the assistant proposed (after the person approved it). Returns a line about any run. */
   applyAgent: (actions: AgentAction[]) => Promise<string | null>;
@@ -205,7 +207,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (isPaused) return;
     if (session.role === 'teacher') {
       // Teachers get a plain view: names, class lists and the approved timetable.
-      const room = await api.classroom(session.institution.id);
+      const [room, attendance] = await Promise.all([api.classroom(session.institution.id), api.listAttendance(session.institution.id).catch(() => [])]);
       const base = blankProfile(room.name);
       setProfile({
         ...base,
@@ -214,6 +216,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         teachers: room.teachers as unknown as Profile['teachers'],
         rooms: room.rooms as unknown as Profile['rooms'],
         subjects: room.subjects as unknown as Profile['subjects'],
+        operations: { ...emptyOperations(), attendance, substitutions: room.covering ?? [] },
       });
       const live = { id: 'live', label: 'Timetable', status: 'approved', generatedSessions: room.sessions } as unknown as TimetableRecord;
       setVersions([live]);
@@ -512,6 +515,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     update,
     updateOperations,
+    takeAttendance: async (date, session, absentStudentIds) => {
+      if (!institutionId) throw new Error('Sign in first.');
+      // A student added a moment ago has to reach the server before they can be marked.
+      await saveNow();
+      const record = await api.takeAttendance(institutionId, { date, sessionId: session.id, absentStudentIds });
+      setProfile((p) => ({
+        ...p,
+        operations: { ...p.operations, attendance: [...p.operations.attendance.filter((item) => !(item.date === date && item.sessionId === session.id)), record] },
+      }));
+    },
     loadSample: () => {
       const sample = sampleInstitute();
       update((p) => ({ ...p, ...sample, institution: { ...sample.institution, name: p.institution.name || sample.institution.name, type: p.institution.type } }));
