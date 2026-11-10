@@ -7,6 +7,8 @@
 import crypto from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 
+import { parsePunches } from './punchfile.mjs';
+
 const BATCH = 200;
 const TIME = /^(\d{4})[-/](\d{2})[-/](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/;
 
@@ -148,5 +150,5 @@ export const createBridge = ({ url, key, offset, queueFile, fetchImpl = fetch, l
   };
 };
 
-/** "A01,2026-11-09 08:50" or tab-separated, one per line, for readers that only export a file. */
-export const parseCsv = (text) => parseAttlog(String(text ?? '').replace(/[,;]/g, '\t'));
+/** Any exported attendance file, read the same way as the app reads uploads. */
+export const parseCsv = (text) => parsePunches(text).punches.map(({ id, time }) => ({ pin: id, time }));

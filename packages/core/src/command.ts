@@ -122,7 +122,14 @@ export const parseCommand = (input: string, profile: ProfileData, today = new Da
     const range = /\bfrom\b(.+?)\b(to|until|till)\b(.+)$/i.exec(text);
     if (range) {
       const from = dateIn(range[1], today);
-      const to = dateIn(range[3], today);
+      let to = dateIn(range[3], today);
+      // "Monday to Wednesday" said on a Tuesday: Monday is next week's, so Wednesday is too.
+      if (from && to && to < from && !/\d{4}-\d{2}-\d{2}/.test(range[3])) {
+        const [year, month, day] = to.split('-').map(Number);
+        const end = new Date(year, month - 1, day);
+        while (toDateKey(end) < from) end.setDate(end.getDate() + 7);
+        to = toDateKey(end);
+      }
       if (from && to) {
         const reason = /\b(conference|sick|medical|exam duty|training|workshop|personal)\b/i.exec(text)?.[1];
         return {

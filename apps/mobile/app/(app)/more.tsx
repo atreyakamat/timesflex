@@ -76,7 +76,8 @@ export default function More() {
     ['Cover', 'Substitutions when someone is away', 'swap-horizontal-outline', '/cover'],
     ['Scan cards', 'Use this phone at the gate or in class', 'qr-code-outline', '/scan'],
     ['Student cards', 'Print QR cards for your students', 'card-outline', '/cards'],
-    ['Devices', 'Fingerprint machines, scanners, other software', 'hardware-chip-outline', '/devices'],
+    ['Fingerprint machines', 'Connect any brand, upload its file, match IDs', 'finger-print-outline', '/biometric'],
+    ['Devices', 'Keys for scanners and other software', 'hardware-chip-outline', '/devices'],
   ];
 
   return (

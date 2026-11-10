@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid';
 import { attendanceOf, liveSessionsOf } from './attendance.js';
 import { bearerToken, createRateLimiter, hashToken } from './auth.js';
 import { profileOf } from './members.js';
+import { parsePunches } from './punchfile.js';
 
 const CODE_PREFIX = 'TF1';
 const KEY_PREFIX = 'tfd_';
@@ -24,6 +25,10 @@ const CLOCK_SLACK = 10 * 60 * 1000;
 const DOUBLE_TAP = 60 * 1000;
 const DEFAULT_GRACE = 10;
 const DEFAULT_ZONE = 'Asia/Kolkata';
+const MAX_READER_LINKS = 5000;
+const MAX_IMPORT = 20000;
+// An exported file can cover a whole term.
+const OLDEST_IMPORT = 62 * DAY;
 
 /** The date, time and weekday at the college, wherever the server happens to be. */
 export const localParts = (iso, timeZone = DEFAULT_ZONE) => {
@@ -36,6 +41,26 @@ export const localParts = (iso, timeZone = DEFAULT_ZONE) => {
   }
   const part = Object.fromEntries(formatter.formatToParts(new Date(iso)).map(({ type, value }) => [type, value]));
   return { date: `${part.year}-${part.month}-${part.day}`, time: `${part.hour}:${part.minute}`, day: part.weekday };
+};
+
+/** "YYYY-MM-DD HH:MM:SS" on the college's clock, as a UTC instant. Machines report time with no zone. */
+export const zonedToUtc = (local, timeZone = DEFAULT_ZONE) => {
+  const [y, mo, d, h, mi, s] = local.split(/[- :]/).map(Number);
+  const asIfUtc = Date.UTC(y, mo - 1, d, h, mi, s);
+  const format = (zone) => new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  let formatter;
+  try {
+    formatter = format(timeZone);
+  } catch {
+    formatter = format(DEFAULT_ZONE);
+  }
+  // How far the zone is from UTC at a given moment, which changes with summer time.
+  const offsetAt = (ms) => {
+    const p = Object.fromEntries(formatter.formatToParts(new Date(ms)).map(({ type, value }) => [type, Number(value)]));
+    return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - ms;
+  };
+  const first = asIfUtc - offsetAt(asIfUtc);
+  return new Date(asIfUtc - offsetAt(first)).toISOString();
 };
 
 const newSecret = () => crypto.randomBytes(32).toString('base64url');
@@ -55,18 +80,34 @@ export const verifyCard = (secret, code) => {
 
 const everyStudent = (institution) => (profileOf(institution).divisions ?? []).flatMap((division) => (division.students ?? []).map((student) => ({ student, division })));
 
-/** Who a scan means. A roll number that fits two students is refused: guessing would mark the wrong one. */
-export const identify = async (store, institution, identifier) => {
-  const value = identifier.trim();
+/**
+ * Works out who a scan means: a signed card, a machine ID the admin linked, or a roll number.
+ * A roll number that fits two students is refused: guessing would mark the wrong one.
+ * Loads the college's lists once, so a batch of thousands stays quick.
+ */
+export const makeResolver = async (store, institution) => {
   const students = everyStudent(institution);
-  if (value.startsWith(`${CODE_PREFIX}.`)) {
-    const id = verifyCard(await store.getCardSecret(institution.id, newSecret()), value);
-    return (id && students.find(({ student }) => student.id === id)) || null;
+  const byId = new Map(students.map((entry) => [entry.student.id, entry]));
+  const linked = new Map((await store.listReaderIds(institution.id)).map((row) => [row.readerId.toLowerCase(), row.studentId]));
+  const byRoll = new Map();
+  for (const entry of students) {
+    const roll = String(entry.student.rollNo ?? '').trim().toLowerCase();
+    if (roll) byRoll.set(roll, byRoll.has(roll) ? null : entry);
   }
-  const wanted = value.toLowerCase();
-  const matches = students.filter(({ student }) => String(student.rollNo ?? '').trim().toLowerCase() === wanted);
-  return matches.length === 1 ? matches[0] : null;
+  let secret = null;
+  return async (identifier) => {
+    const value = identifier.trim();
+    if (value.startsWith(`${CODE_PREFIX}.`)) {
+      secret ??= await store.getCardSecret(institution.id, newSecret());
+      const id = verifyCard(secret, value);
+      return (id && byId.get(id)) || null;
+    }
+    const wanted = value.toLowerCase();
+    if (linked.has(wanted)) return byId.get(linked.get(wanted)) ?? null;
+    return byRoll.get(wanted) ?? null;
+  };
 };
+export const identify = async (store, institution, identifier) => (await makeResolver(store, institution))(identifier);
 
 const minutesOf = (time) => {
   const [hours, minutes] = time.slice(0, 5).split(':').map(Number);
@@ -209,11 +250,12 @@ export const mountDeviceApi = (app, { store, route, fail, limits = {} }) => {
     // Oldest first, so someone's real arrival decides whether they were late.
     checked.sort((a, b) => a.at.localeCompare(b.at));
     const record = await scanRecorder(store, institution, { source: device.name, sourceId: device.id, gate: device.kind === 'gate' });
+    const resolve = await makeResolver(store, institution);
     let accepted = 0;
     let duplicates = 0;
     const unmatched = new Set();
     for (const scan of checked) {
-      const found = await identify(store, institution, scan.identifier);
+      const found = await resolve(scan.identifier);
       if (!found) unmatched.add(scan.identifier);
       else if (await record(found, scan.at, scan.scanId)) accepted += 1;
       else duplicates += 1;
@@ -304,7 +346,121 @@ export const mountDevices = (app, { store, route, fail, memberAccess, ownedInsti
   app.get('/api/institutions/:id/devices', route(async (request, response) => {
     const institution = await ownedInstitution(request, request.params.id);
     if (!institution) return notFound(response);
-    response.json((await store.listDevices(institution.id)).map(publicDevice));
+    // An ID linked since it was reported isn't a problem any more.
+    const resolve = await makeResolver(store, institution);
+    const devices = await store.listDevices(institution.id);
+    for (const device of devices) {
+      const still = [];
+      for (const id of device.unmatched ?? []) if (!(await resolve(id))) still.push(id);
+      device.unmatched = still;
+    }
+    response.json(devices.map(publicDevice));
+  }));
+
+  /* ---------- Machine IDs: when the ID on a fingerprint machine isn't a roll number ---------- */
+
+  app.get('/api/institutions/:id/reader-ids', route(async (request, response) => {
+    const institution = await ownedInstitution(request, request.params.id);
+    if (!institution) return notFound(response);
+    const students = new Map(everyStudent(institution).map((entry) => [entry.student.id, entry]));
+    const rows = await store.listReaderIds(institution.id);
+    response.json(
+      rows
+        .map(({ readerId, studentId }) => {
+          const entry = students.get(studentId);
+          return { readerId, studentId, name: entry?.student.name ?? null, rollNo: entry?.student.rollNo ?? null, className: entry?.division.name ?? null };
+        })
+        .sort((a, b) => a.readerId.localeCompare(b.readerId, undefined, { numeric: true })),
+    );
+  }));
+
+  app.post('/api/institutions/:id/reader-ids', route(async (request, response) => {
+    const institution = await ownedInstitution(request, request.params.id);
+    if (!institution) return notFound(response);
+    const { links, text } = request.body ?? {};
+    const students = everyStudent(institution);
+    const known = new Set(students.map((entry) => entry.student.id));
+    const pairs = [];
+    const problems = [];
+    const readerIdOk = (value) => typeof value === 'string' && value.trim() && value.trim().length <= 100;
+    if (Array.isArray(links)) {
+      if (links.length > MAX_READER_LINKS) return fail(response, 400, `At most ${MAX_READER_LINKS} at once`);
+      for (const item of links) {
+        if (!readerIdOk(item?.readerId) || !known.has(item?.studentId)) return fail(response, 400, 'Each link needs a machine ID and one of your students');
+        pairs.push({ readerId: item.readerId.trim(), studentId: item.studentId });
+      }
+    } else if (typeof text === 'string') {
+      // "machine ID, roll number", one per line, pasted from a spreadsheet.
+      const lines = text.split(/\r?\n/).filter((line) => line.trim());
+      if (lines.length > MAX_READER_LINKS) return fail(response, 400, `At most ${MAX_READER_LINKS} lines at once`);
+      for (const line of lines) {
+        const [readerId, roll] = line.split(/[\t,;]/).map((cell) => cell.trim().replace(/^"(.*)"$/, '$1'));
+        if (!readerIdOk(readerId) || !roll) {
+          problems.push({ line, reason: 'Write the machine ID, then the roll number' });
+          continue;
+        }
+        const matches = students.filter((entry) => String(entry.student.rollNo ?? '').trim().toLowerCase() === roll.toLowerCase());
+        if (matches.length !== 1) {
+          problems.push({ line, reason: matches.length ? 'That roll number is used by more than one student. Link this one by picking the student.' : 'No student has that roll number' });
+          continue;
+        }
+        pairs.push({ readerId, studentId: matches[0].student.id });
+      }
+    } else return fail(response, 400, 'Send links, or lines of "machine ID, roll number"');
+    if (pairs.length) await store.setReaderIds(institution.id, pairs);
+    response.json({ saved: pairs.length, problems });
+  }));
+
+  app.delete('/api/institutions/:id/reader-ids/:readerId', route(async (request, response) => {
+    const institution = await ownedInstitution(request, request.params.id);
+    if (!institution) return notFound(response);
+    await store.deleteReaderId(institution.id, request.params.readerId);
+    response.json({ success: true });
+  }));
+
+  /* ---------- Importing a file a machine or its software exported ---------- */
+
+  app.post('/api/institutions/:id/scans/import', route(async (request, response) => {
+    const institution = await ownedInstitution(request, request.params.id);
+    if (!institution) return notFound(response);
+    if (!limiter.take(request.account.id)) return fail(response, 429, 'That is a lot of imports in a short time. Give it a while.');
+    const { text, kind = 'classroom', name = 'import', dryRun } = request.body ?? {};
+    if (typeof text !== 'string' || !text.trim()) return fail(response, 400, 'Choose a file, or paste its contents');
+    if (!['gate', 'classroom'].includes(kind)) return fail(response, 400, 'kind must be gate or classroom');
+    if (typeof name !== 'string' || name.length > 120) return fail(response, 400, 'The file name is too long');
+    const { punches, skipped, unreadable } = parsePunches(text);
+    if (!punches.length) return fail(response, 400, 'We couldn’t find anyone’s ID and a date and time in that file. Check it’s the attendance log, saved as CSV or text.');
+    if (punches.length > MAX_IMPORT) return fail(response, 400, `That file has ${punches.length} punches. Import at most ${MAX_IMPORT} at a time, for example a month.`);
+
+    const timeZone = profileOf(institution).institution?.timezone ?? DEFAULT_ZONE;
+    const resolve = await makeResolver(store, institution);
+    const now = Date.now();
+    const unmatched = new Set();
+    const usable = [];
+    let outOfRange = 0;
+    for (const punch of punches) {
+      const at = zonedToUtc(punch.time, timeZone);
+      const ms = Date.parse(at);
+      if (ms > now + CLOCK_SLACK || ms < now - OLDEST_IMPORT) {
+        outOfRange += 1;
+        continue;
+      }
+      const found = await resolve(punch.id);
+      if (!found) unmatched.add(punch.id);
+      usable.push({ punch, at, found });
+    }
+    const matched = usable.filter((item) => item.found);
+    const summary = { readable: punches.length, matched: matched.length, unmatched: [...unmatched].slice(0, 50), unmatchedCount: unmatched.size, skipped, unreadable, outOfRange };
+    if (dryRun) {
+      const rows = usable.slice(0, 8).map(({ punch, found }) => ({ id: punch.id, time: punch.time, name: found?.student.name ?? null, className: found?.division.name ?? null }));
+      return response.json({ ...summary, rows });
+    }
+    // One fixed source per college, so importing the same file twice adds nothing.
+    const record = await scanRecorder(store, institution, { source: `File: ${name}`, sourceId: `import:${institution.id}`, gate: kind === 'gate' });
+    matched.sort((a, b) => a.at.localeCompare(b.at));
+    let accepted = 0;
+    for (const { punch, at, found } of matched) if (await record(found, at, `${punch.id}|${punch.time}`)) accepted += 1;
+    response.json({ ...summary, accepted, duplicates: matched.length - accepted });
   }));
 
   app.delete('/api/institutions/:id/devices/:deviceId', route(async (request, response) => {

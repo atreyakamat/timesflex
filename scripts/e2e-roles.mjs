@@ -335,9 +335,39 @@ try {
   check('the office sees the device is alive, and what it couldn’t match', await seen('NOT-A-STUDENT'));
   check('the key isn’t shown again', !(await seen('tfd_')));
 
+  /* ---------- Any fingerprint machine: upload its file, link its IDs ---------- */
+  await go(`${APP}/biometric`);
+  await has('Fingerprint machines');
+  check('the connect guide lists every route', (await seen('ADMS, Cloud server or PUSH')) && (await seen('save a file')));
+  await click('Upload a file');
+  await has('Preview');
+  const punchFile = `Sr No,Emp Code,Punch Time\n1,${firstInClass.rollNo},${classDate.split('-').reverse().join('/')} 08:40 AM\n2,9999,${classDate.split('-').reverse().join('/')} 08:41 AM\n`;
+  await type('Emp Code,Punch Time\nA01,09/11/2026 08:50 AM', punchFile);
+  await click('Preview');
+  await has('of 2 punches matched');
+  check('a machine’s CSV previews, matching the known student', (await seen('1 of 2 punches matched')) && (await seen(firstInClass.name)));
+  check('an unknown machine ID is pointed out', await seen('no student with this ID'));
+  await shot('r7c-upload-preview');
+  await click(await ev(`[...document.querySelectorAll('[role="tab"],[role="button"]')].map((x) => x.textContent.trim()).find((t) => t.startsWith('Machine IDs'))`));
+  await has('Not matched yet');
+  check('the unmatched ID waits to be linked', await seen('9999'));
+  await type('1023, SYA01\n1024, SYA02', `9999, ${(classStudents[2] ?? classStudents[0]).rollNo}`);
+  await click('Link these');
+  await has('Linked (1)');
+  check('pasting “machine ID, roll number” links it', await seen(`9999 → ${(classStudents[2] ?? classStudents[0]).name}`));
+  await shot('r7d-machine-ids');
+  await click('Upload a file');
+  await has('Preview');
+  await click('Preview');
+  await has('2 of 2 punches matched');
+  await click('Import 2 punches');
+  await has('Imported 2 scans');
+  const imported = await apiCall('GET', `/api/institutions/${collegeId}/scans?date=${classDate}`, adminToken);
+  check('the import is saved, with the linked student', imported.json.some((s) => s.studentName === (classStudents[2] ?? classStudents[0]).name && s.source.startsWith('File:')));
+
   /* ---------- Phone ---------- */
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-  for (const page of ['students', 'mark', 'access', 'attendance', 'cards', 'devices', 'scan']) {
+  for (const page of ['students', 'mark', 'access', 'attendance', 'cards', 'devices', 'scan', 'biometric']) {
     await go(`${APP}/${page}`);
     await sleep(600);
     check(`${page} fits a phone`, (await ev(`document.documentElement.scrollWidth - innerWidth`)) <= 0);

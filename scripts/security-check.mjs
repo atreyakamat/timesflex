@@ -108,6 +108,10 @@ for (const [method, url, body] of [
   ['GET', `${inst}/scans`],
   ['GET', `${inst}/devices`],
   ['POST', `${inst}/devices`, { name: 'x', kind: 'gate' }],
+  ['GET', `${inst}/reader-ids`],
+  ['POST', `${inst}/reader-ids`, { text: '1, A01' }],
+  ['DELETE', `${inst}/reader-ids/1`],
+  ['POST', `${inst}/scans/import`, { text: 'A01,2026-11-09 08:50', dryRun: true }],
 ]) {
   const r = await call(method, url, { token: mallory.token, ...(body ? { body } : {}) });
   check(`another college can’t ${method} ${url.split('/').slice(4).join('/')}`, r.status === 404, r.status);

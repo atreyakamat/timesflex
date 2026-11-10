@@ -118,6 +118,13 @@ CREATE INDEX IF NOT EXISTS devices_institution ON devices (institution_id);
 
 ALTER TABLE institutions ADD COLUMN IF NOT EXISTS card_secret TEXT;
 
+CREATE TABLE IF NOT EXISTS reader_ids (
+  institution_id TEXT NOT NULL REFERENCES institutions (id) ON DELETE CASCADE,
+  reader_id TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  PRIMARY KEY (institution_id, reader_id)
+);
+
 CREATE TABLE IF NOT EXISTS message_links (
   message_id TEXT PRIMARY KEY,
   notice_id TEXT NOT NULL REFERENCES notices (id) ON DELETE CASCADE,
@@ -346,6 +353,30 @@ export const createPgStore = async (connectionString) => {
     async deleteDevice(id, institutionId) {
       await pool.query('DELETE FROM devices WHERE id = $1 AND institution_id = $2', [id, institutionId]);
     },
+    async listReaderIds(institutionId) {
+      const result = await pool.query('SELECT reader_id, student_id FROM reader_ids WHERE institution_id = $1', [institutionId]);
+      return result.rows.map((row) => ({ readerId: row.reader_id, studentId: row.student_id }));
+    },
+    async setReaderIds(institutionId, pairs) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        for (const { readerId, studentId } of pairs) {
+          // Machine IDs are matched without regard to case, so store one spelling.
+          await client.query('DELETE FROM reader_ids WHERE institution_id = $1 AND lower(reader_id) = lower($2)', [institutionId, readerId]);
+          await client.query('INSERT INTO reader_ids (institution_id, reader_id, student_id) VALUES ($1, $2, $3)', [institutionId, readerId, studentId]);
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async deleteReaderId(institutionId, readerId) {
+      await pool.query('DELETE FROM reader_ids WHERE institution_id = $1 AND lower(reader_id) = lower($2)', [institutionId, readerId]);
+    },
     /** The college's card signing secret, made the first time it's needed. Two requests agree on one. */
     async getCardSecret(id, fresh) {
       const result = await pool.query('UPDATE institutions SET card_secret = COALESCE(card_secret, $2) WHERE id = $1 RETURNING card_secret', [id, fresh]);
@@ -514,7 +545,7 @@ export const createFileStore = async (filePath) => {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  state = { accounts: [], sessions: [], institutions: [], timetables: [], notices: [], messageLinks: [], memberships: [], invites: [], events: [], attendance: [], scans: [], devices: [], cardSecrets: {}, ...state };
+  state = { accounts: [], sessions: [], institutions: [], timetables: [], notices: [], messageLinks: [], memberships: [], invites: [], events: [], attendance: [], scans: [], devices: [], cardSecrets: {}, readerIds: [], ...state };
   const dropNoticesOf = (ids) => {
     state.memberships = state.memberships.filter((item) => !ids.has(item.institutionId));
     state.invites = state.invites.filter((item) => !ids.has(item.institutionId));
@@ -523,6 +554,7 @@ export const createFileStore = async (filePath) => {
     state.scans = state.scans.filter((item) => !ids.has(item.institutionId));
     state.devices = state.devices.filter((item) => !ids.has(item.institutionId));
     for (const id of ids) delete state.cardSecrets[id];
+    state.readerIds = state.readerIds.filter((item) => !ids.has(item.institutionId));
     const gone = new Set(state.notices.filter((item) => ids.has(item.institutionId)).map((item) => item.id));
     state.notices = state.notices.filter((item) => !gone.has(item.id));
     state.messageLinks = state.messageLinks.filter((item) => !gone.has(item.noticeId));
@@ -662,6 +694,20 @@ export const createFileStore = async (filePath) => {
     },
     async deleteDevice(id, institutionId) {
       state.devices = state.devices.filter((item) => !(item.id === id && item.institutionId === institutionId));
+      await persist();
+    },
+    async listReaderIds(institutionId) {
+      return clone(state.readerIds.filter((item) => item.institutionId === institutionId).map(({ readerId, studentId }) => ({ readerId, studentId })));
+    },
+    async setReaderIds(institutionId, pairs) {
+      for (const { readerId, studentId } of pairs) {
+        state.readerIds = state.readerIds.filter((item) => !(item.institutionId === institutionId && item.readerId.toLowerCase() === readerId.toLowerCase()));
+        state.readerIds.push({ institutionId, readerId, studentId });
+      }
+      await persist();
+    },
+    async deleteReaderId(institutionId, readerId) {
+      state.readerIds = state.readerIds.filter((item) => !(item.institutionId === institutionId && item.readerId.toLowerCase() === readerId.toLowerCase()));
       await persist();
     },
     async getCardSecret(id, fresh) {

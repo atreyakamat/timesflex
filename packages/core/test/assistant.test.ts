@@ -90,3 +90,15 @@ test('a supported model answer still works when the rules miss it', () => {
   assert.equal(result.understood, true);
   assert.equal(result.actions[0].type, 'generateVariants');
 });
+
+test('a leave range whose end weekday comes round before its start still covers every day', () => {
+  // On a Tuesday, "Monday" is next week's while "Wednesday" is tomorrow. The range is next Monday to Wednesday.
+  const tuesday = new Date(2026, 10, 10);
+  const leave = parseCommand('Mehta is on leave from Monday to Wednesday', profile, tuesday).actions[0] as Extract<AgentAction, { type: 'leave' }>;
+  assert.deepEqual([leave.from, leave.to], ['2026-11-16', '2026-11-18']);
+  const friday = new Date(2026, 10, 13);
+  const across = parseCommand('Mehta is on leave from Friday to Tuesday', profile, friday).actions[0] as Extract<AgentAction, { type: 'leave' }>;
+  assert.deepEqual([across.from, across.to], ['2026-11-13', '2026-11-17'], 'across a weekend');
+  const dated = parseCommand('Mehta is on leave from 2026-11-20 to 2026-11-18', profile, tuesday).actions[0] as Extract<AgentAction, { type: 'leave' }>;
+  assert.deepEqual([dated.from, dated.to], ['2026-11-20', '2026-11-20'], 'written dates are taken as written');
+});

@@ -115,7 +115,7 @@ export default function Devices() {
                 <Row gap={8} style={{ alignItems: 'flex-start' }}>
                   <Icon name="alert-circle-outline" size={16} color={c.warn} />
                   <T v="small" style={{ flex: 1 }}>
-                    IDs it couldn’t match to one student: {device.unmatched.join(', ')}. Each needs to equal a roll number used only once in the college.
+                    IDs it couldn’t match to a student: {device.unmatched.join(', ')}. Link them under Fingerprint machines.
                   </T>
                 </Row>
               ) : null}
@@ -140,7 +140,8 @@ export default function Devices() {
       <SectionTitle title="How fingerprints work" />
       <Card style={{ gap: 6 }}>
         <T v="small">Phones can’t identify a student by fingerprint, so this needs a fingerprint machine. The machine keeps the fingerprints and tells TimeFlex only the student’s ID and the time. TimeFlex never receives or stores a fingerprint.</T>
-        <T v="small">Enrol each student using their roll number as their ID. Before collecting fingerprints, students need to be told and to agree. A QR card is always the simpler option.</T>
+        <T v="small">Enrol each student using their roll number as their ID, or link the machine’s own IDs. Before collecting fingerprints, students need to be told and to agree. A QR card is always the simpler option.</T>
+        <Button label="Connect a fingerprint machine" kind="secondary" size="sm" icon="finger-print-outline" onPress={() => router.push('/biometric')} style={{ alignSelf: 'flex-start' }} />
       </Card>
 
       <Sheet visible={!!removing} onClose={() => setRemoving(null)} title={`Remove ${removing?.name ?? ''}?`}>

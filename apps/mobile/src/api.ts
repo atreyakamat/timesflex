@@ -185,6 +185,25 @@ export interface DeviceRow {
   lastSeenAt: string | null;
   unmatched: string[];
 }
+export interface ReaderLink {
+  readerId: string;
+  studentId: string;
+  name: string | null;
+  rollNo: string | null;
+  className: string | null;
+}
+export interface ImportSummary {
+  readable: number;
+  matched: number;
+  unmatched: string[];
+  unmatchedCount: number;
+  skipped: number;
+  unreadable: string[];
+  outOfRange: number;
+  rows: { id: string; time: string; name: string | null; className: string | null }[];
+  accepted: number;
+  duplicates: number;
+}
 export type ScanResult = { matched: false } | { matched: true; duplicate: boolean; student: { id: string; name: string; rollNo: string; divisionId: string; divisionName: string } };
 
 /** A link someone can tap to accept an invite: this page's address, or the server the app uses. */
@@ -212,6 +231,10 @@ export const api = {
   rotateCards: (id: string) => request(`/api/institutions/${id}/cards/rotate`, { method: 'POST', body: {} }),
   scan: (id: string, identifier: string, purpose: 'class' | 'gate') => request<ScanResult>(`/api/institutions/${id}/scans`, { method: 'POST', body: { identifier, purpose } }),
   listScans: (id: string, date: string) => request<ScanRecord[]>(`/api/institutions/${id}/scans?date=${encodeURIComponent(date)}`),
+  listReaderIds: (id: string) => request<ReaderLink[]>(`/api/institutions/${id}/reader-ids`),
+  linkReaderIds: (id: string, body: { links: { readerId: string; studentId: string }[] } | { text: string }) => request<{ saved: number; problems: { line: string; reason: string }[] }>(`/api/institutions/${id}/reader-ids`, { method: 'POST', body }),
+  unlinkReaderId: (id: string, readerId: string) => request(`/api/institutions/${id}/reader-ids/${encodeURIComponent(readerId)}`, { method: 'DELETE' }),
+  importScans: (id: string, body: { text: string; kind: 'gate' | 'classroom'; name: string; dryRun: boolean }) => request<ImportSummary>(`/api/institutions/${id}/scans/import`, { method: 'POST', body, timeoutMs: 180000 }),
   listDevices: (id: string) => request<DeviceRow[]>(`/api/institutions/${id}/devices`),
   createDevice: (id: string, body: { name: string; kind: DeviceRow['kind'] }) => request<DeviceRow & { key: string }>(`/api/institutions/${id}/devices`, { method: 'POST', body }),
   deleteDevice: (id: string, deviceId: string) => request(`/api/institutions/${id}/devices/${deviceId}`, { method: 'DELETE' }),

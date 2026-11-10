@@ -4,7 +4,7 @@ TimeFlex connects to the rest of a college in three ways. All of them use a key 
 
 | You have | Use | Key type |
 | --- | --- | --- |
-| A fingerprint or face machine | [The biometric bridge](../plugins/biometric-bridge/README.md) | Gate or Classroom |
+| A fingerprint or face machine, any brand | [The fingerprint guide](BIOMETRIC-GUIDE.md) | Gate or Classroom |
 | Your own reader (ESP32, Raspberry Pi, RFID) | [Send scans](#send-scans) | Gate or Classroom |
 | An ERP or other software | [Read data](#read-data) | Other software |
 
@@ -29,7 +29,7 @@ POST /api/device/v1/scans
 { "accepted": 1, "duplicates": 0, "unmatched": [] }
 ```
 
-`unmatched` lists identifiers that don't fit exactly one student. A roll number used in two classes is treated as unmatched rather than guessed. Unmatched IDs also appear in the app, beside the device.
+`unmatched` lists identifiers that don't fit exactly one student. An identifier is matched as a signed QR card, then a machine ID linked under More > Fingerprint machines, then a roll number. A roll number used in two classes is treated as unmatched rather than guessed. Unmatched IDs also appear in the app, beside the device.
 
 | Status | Meaning | What to do |
 | --- | --- | --- |
@@ -65,7 +65,6 @@ Dates are `YYYY-MM-DD`. These contain student records, so the receiving system t
 
 - **Importing students from another system.** Class lists are pasted or typed in the app for now.
 - **Webhooks** (TimeFlex calling your system). Poll the read API instead.
-- **Fingerprint machine IDs that differ from roll numbers.** The ID on the machine must equal a roll number that's unique across the college.
 
 ## Fingerprints and the law
 
