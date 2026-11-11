@@ -20,6 +20,8 @@ export interface ScanRecord {
   date: string;
   time: string;
   source: string;
+  /** Set when a student tapped in for one particular class. */
+  sessionId?: string;
 }
 
 export const escapeHtml = (text: unknown) =>

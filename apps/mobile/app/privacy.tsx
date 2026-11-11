@@ -4,7 +4,7 @@ import { space } from '../src/theme';
 import { Card, IconButton, Row, Screen, T } from '../src/ui';
 
 const SECTIONS: [string, string][] = [
-  ['What is stored', 'Your name, e-mail and password, kept only as a secure hash. Your institute’s classes, subjects, rooms and timetables. Teachers’ names and any phone numbers or e-mails you add. Student names and attendance, if you add them. If your college uses cards or fingerprint machines, when each student scanned.'],
+  ['What is stored', 'Your name, e-mail and password, kept only as a secure hash. Your institute’s classes, subjects, rooms and timetables. Teachers’ names and any phone numbers or e-mails you add. Student names and attendance, if you add them. If your college uses cards or fingerprint machines, when each student scanned. If phone check-in is on, TimeFlex checks a phone’s network address at the moment it taps in, and doesn’t store it.'],
   ['Fingerprints', 'TimeFlex never receives or stores a fingerprint. A fingerprint machine keeps those itself, and tells TimeFlex only a student’s ID and the time. A college using one is responsible for telling students and getting their agreement. A QR card holds a code and no personal details.'],
   ['Why', 'Only to build timetables, arrange cover, keep attendance and tell teachers about changes. It is not sold, and not used for advertising.'],
   ['Who can see it', 'Only people signed in to your institute’s account, and whoever runs this server, who can reach the database to keep it working.'],

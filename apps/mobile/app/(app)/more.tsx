@@ -74,6 +74,7 @@ export default function More() {
     ['Class lists', 'Students, batches and class teachers', 'list-outline', '/setup/classes'],
     ['Teacher access', 'Invite teachers to sign in', 'key-outline', '/access'],
     ['Cover', 'Substitutions when someone is away', 'swap-horizontal-outline', '/cover'],
+    ['Phone check-in', 'Students tap in on the department Wi-Fi', 'wifi-outline', '/wifi'],
     ['Scan cards', 'Use this phone at the gate or in class', 'qr-code-outline', '/scan'],
     ['Student cards', 'Print QR cards for your students', 'card-outline', '/cards'],
     ['Fingerprint machines', 'Connect any brand, upload its file, match IDs', 'finger-print-outline', '/biometric'],

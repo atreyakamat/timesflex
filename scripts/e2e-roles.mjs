@@ -363,11 +363,41 @@ try {
   await click('Import 2 punches');
   await has('Imported 2 scans');
   const imported = await apiCall('GET', `/api/institutions/${collegeId}/scans?date=${classDate}`, adminToken);
+  /* ---------- A student taps in from their phone ---------- */
+  await go(`${APP}/wifi`);
+  await has('Phone check-in');
+  await waitFor(`__has('The address TimeFlex sees for you now')`);
+  const seenIp = await ev(`document.body.innerText.match(/sees for you now: ([0-9a-fA-F:.]+)/)[1]`);
+  check('the admin sees the address to add', Boolean(seenIp), seenIp);
+  await type('e.g. Computer dept Wi-Fi', 'Test Wi-Fi');
+  await type('e.g. 203.0.113.7 or 10.20.0.0/16', seenIp);
+  await sleep(150);
+  await click('Add network');
+  await has('You’re on “Test Wi-Fi”');
+  check('adding that address validates it straight away', true);
+  await click('On');
+  await sleep(600);
+  const made = await apiCall('POST', `/api/institutions/${collegeId}/checkin/links`, adminToken, { studentId: classStudents[0].id });
+  const studentCode = made.json[0].code;
+  await shot('r7e-wifi-admin');
+  await signOutBrowser();
+  await go(`${APP}/checkin?code=${encodeURIComponent(studentCode)}`);
+  await has('Is this you?');
+  check('a student’s link shows who it’s for', await seen(classStudents[0].name));
+  await click('Yes, use this phone');
+  await waitFor(`__has('On your department’s Wi-Fi')`);
+  check('the student’s phone is recognised as on the Wi-Fi', true);
+  check('a used link leaves no staff screens behind', !(await seen('Teacher access')));
+  await shot('r7f-student-checkin');
+  const reused = await apiCall('POST', '/api/student/v1/claim', null, { code: studentCode });
+  check('the link can’t be used again', reused.status === 410, reused.status);
+  await signOutBrowser();
+  await ev(`localStorage.setItem('timeflex.session', ${JSON.stringify(adminToken)})`);
   check('the import is saved, with the linked student', imported.json.some((s) => s.studentName === (classStudents[2] ?? classStudents[0]).name && s.source.startsWith('File:')));
 
   /* ---------- Phone ---------- */
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-  for (const page of ['students', 'mark', 'access', 'attendance', 'cards', 'devices', 'scan', 'biometric']) {
+  for (const page of ['students', 'mark', 'access', 'attendance', 'cards', 'devices', 'scan', 'biometric', 'wifi']) {
     await go(`${APP}/${page}`);
     await sleep(600);
     check(`${page} fits a phone`, (await ev(`document.documentElement.scrollWidth - innerWidth`)) <= 0);

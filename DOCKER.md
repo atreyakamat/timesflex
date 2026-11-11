@@ -88,6 +88,8 @@ Teachers take the register for their own classes, and for classes they've been a
 - **Fingerprint or face machines:** run the bridge on the college's network with `docker compose --profile bridge up -d bridge`. See [the bridge's guide](plugins/biometric-bridge/README.md). It hasn't been tried on real hardware yet, so test one machine first.
 - **Your own readers and other software:** see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
+**Phone check-in:** under More > Phone check-in, add each department network and print QR slips for students. TimeFlex must see students' real addresses. Behind the `https` profile there are two proxies, so set `TRUST_PROXY=2` in `.env`. If the server is on the internet, the address to add is the department's public one; if it's on the college network, it's the local range.
+
 A browser only opens the camera on https or localhost. On a plain `http://100.x` address, scan with the phone app or a handheld scanner, or put the site behind the https profile.
 
 ## Someone forgot their password

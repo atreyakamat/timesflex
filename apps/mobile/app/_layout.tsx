@@ -32,7 +32,7 @@ function Oops({ retry }: { retry: () => Promise<void> }) {
   );
 }
 
-const PUBLIC = ['/', '/welcome', '/auth', '/privacy', '/join'];
+const PUBLIC = ['/', '/welcome', '/auth', '/privacy', '/join', '/checkin'];
 
 /** Screens that need an account go to the start page without one. */
 function SignedOutGuard() {

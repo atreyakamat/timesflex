@@ -36,8 +36,10 @@ export default function Attendance() {
   }, [institutionId, date]);
   useFocusEffect(loadScans);
 
-  const scanned = firstScans(scans);
-  const missing = notScanned(students, scans);
+  // A phone tap counts for its own class. Gate and card scans count for the day.
+  const relevant = scans.filter((scan) => !scan.sessionId || scan.sessionId === session?.id);
+  const scanned = firstScans(relevant);
+  const missing = notScanned(students, relevant);
   const save = async () => {
     if (!session) return;
     setSaving(true);

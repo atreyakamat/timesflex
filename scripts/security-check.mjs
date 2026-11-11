@@ -112,6 +112,10 @@ for (const [method, url, body] of [
   ['POST', `${inst}/reader-ids`, { text: '1, A01' }],
   ['DELETE', `${inst}/reader-ids/1`],
   ['POST', `${inst}/scans/import`, { text: 'A01,2026-11-09 08:50', dryRun: true }],
+  ['GET', `${inst}/checkin`],
+  ['PUT', `${inst}/checkin`, { enabled: false, networks: [] }],
+  ['POST', `${inst}/checkin/links`, { studentId: 'x' }],
+  ['GET', `${inst}/checkin/students`],
 ]) {
   const r = await call(method, url, { token: mallory.token, ...(body ? { body } : {}) });
   check(`another college can’t ${method} ${url.split('/').slice(4).join('/')}`, r.status === 404, r.status);
@@ -134,6 +138,11 @@ const forgedCard = await call('POST', `${inst}/scans`, { token: alice.token, bod
 check('a forged card isn’t accepted', forgedCard.json?.matched === false, forgedCard.status);
 await call('DELETE', `${inst}/devices/${gate.json.id}`, { token: alice.token });
 check('a removed key stops at once', (await deviceScan(gate.json.key)).status === 401);
+check('a phone can’t tap in without its token', (await call('POST', '/api/student/v1/checkin', { body: {} })).status === 401);
+check('a login token isn’t a phone token', (await call('POST', '/api/student/v1/checkin', { token: alice.token, body: {} })).status === 401);
+check('a made-up student link gets nowhere', (await call('POST', '/api/student/v1/claim', { body: { code: 'A'.repeat(43) } })).status === 410);
+const widest = await call('PUT', `${inst}/checkin`, { token: alice.token, body: { enabled: true, networks: [{ label: 'All', cidr: '0.0.0.0/0' }] } });
+check('the whole internet can’t be added as a network', widest.status === 400, widest.status);
 const otherEvent = await call('POST', `${inst}/events`, { token: mallory.token, body: { studentId: 's', kind: 'bunked', date: new Date().toISOString().slice(0, 10) } });
 check('cannot flag a student in another college', otherEvent.status === 404, otherEvent.status);
 const otherRoom = await call('GET', `${inst}/classroom`, { token: mallory.token });

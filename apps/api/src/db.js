@@ -118,6 +118,17 @@ CREATE INDEX IF NOT EXISTS devices_institution ON devices (institution_id);
 
 ALTER TABLE institutions ADD COLUMN IF NOT EXISTS card_secret TEXT;
 
+ALTER TABLE institutions ADD COLUMN IF NOT EXISTS checkin JSONB;
+
+CREATE TABLE IF NOT EXISTS student_passes (
+  token_hash TEXT PRIMARY KEY,
+  institution_id TEXT NOT NULL REFERENCES institutions (id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  expires_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS student_passes_student ON student_passes (institution_id, student_id);
+
 CREATE TABLE IF NOT EXISTS reader_ids (
   institution_id TEXT NOT NULL REFERENCES institutions (id) ON DELETE CASCADE,
   reader_id TEXT NOT NULL,
@@ -179,6 +190,8 @@ const toInvite = (row) => ({
 const toEvent = (row) => ({ ...row.data, id: row.id, institutionId: row.institution_id });
 
 const toDevice = (row) => ({ ...row.data, id: row.id, institutionId: row.institution_id });
+const OFF = { enabled: false, networks: [] };
+const toPass = (row) => ({ tokenHash: row.token_hash, institutionId: row.institution_id, studentId: row.student_id, kind: row.kind, expiresAt: row.expires_at });
 const MAX_SCANS = 20000;
 const MAX_EVENTS = 2000;
 /** The same filtering for both stores. */
@@ -352,6 +365,31 @@ export const createPgStore = async (connectionString) => {
     },
     async deleteDevice(id, institutionId) {
       await pool.query('DELETE FROM devices WHERE id = $1 AND institution_id = $2', [id, institutionId]);
+    },
+    async getCheckinSettings(id) {
+      const result = await pool.query('SELECT checkin FROM institutions WHERE id = $1', [id]);
+      return result.rows[0]?.checkin ?? OFF;
+    },
+    async setCheckinSettings(id, settings) {
+      await pool.query('UPDATE institutions SET checkin = $2 WHERE id = $1', [id, JSON.stringify(settings)]);
+    },
+    async createStudentPass({ tokenHash, institutionId, studentId, kind, expiresAt }) {
+      await pool.query('INSERT INTO student_passes (token_hash, institution_id, student_id, kind, expires_at) VALUES ($1, $2, $3, $4, $5)', [tokenHash, institutionId, studentId, kind, expiresAt]);
+    },
+    async getStudentPass(tokenHash) {
+      const result = await pool.query('SELECT * FROM student_passes WHERE token_hash = $1', [tokenHash]);
+      return result.rows[0] ? toPass(result.rows[0]) : null;
+    },
+    async claimStudentPass(tokenHash) {
+      const result = await pool.query('DELETE FROM student_passes WHERE token_hash = $1 RETURNING token_hash', [tokenHash]);
+      return result.rowCount === 1;
+    },
+    async deleteStudentPasses(institutionId, studentId, kind) {
+      await pool.query('DELETE FROM student_passes WHERE institution_id = $1 AND student_id = $2 AND ($3::text IS NULL OR kind = $3)', [institutionId, studentId, kind ?? null]);
+    },
+    async listStudentPasses(institutionId, kind) {
+      const result = await pool.query('SELECT * FROM student_passes WHERE institution_id = $1 AND kind = $2', [institutionId, kind]);
+      return result.rows.map(toPass);
     },
     async listReaderIds(institutionId) {
       const result = await pool.query('SELECT reader_id, student_id FROM reader_ids WHERE institution_id = $1', [institutionId]);
@@ -545,7 +583,7 @@ export const createFileStore = async (filePath) => {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  state = { accounts: [], sessions: [], institutions: [], timetables: [], notices: [], messageLinks: [], memberships: [], invites: [], events: [], attendance: [], scans: [], devices: [], cardSecrets: {}, readerIds: [], ...state };
+  state = { accounts: [], sessions: [], institutions: [], timetables: [], notices: [], messageLinks: [], memberships: [], invites: [], events: [], attendance: [], scans: [], devices: [], cardSecrets: {}, readerIds: [], checkin: {}, studentPasses: [], ...state };
   const dropNoticesOf = (ids) => {
     state.memberships = state.memberships.filter((item) => !ids.has(item.institutionId));
     state.invites = state.invites.filter((item) => !ids.has(item.institutionId));
@@ -555,6 +593,8 @@ export const createFileStore = async (filePath) => {
     state.devices = state.devices.filter((item) => !ids.has(item.institutionId));
     for (const id of ids) delete state.cardSecrets[id];
     state.readerIds = state.readerIds.filter((item) => !ids.has(item.institutionId));
+    state.studentPasses = state.studentPasses.filter((item) => !ids.has(item.institutionId));
+    for (const id of ids) delete state.checkin[id];
     const gone = new Set(state.notices.filter((item) => ids.has(item.institutionId)).map((item) => item.id));
     state.notices = state.notices.filter((item) => !gone.has(item.id));
     state.messageLinks = state.messageLinks.filter((item) => !gone.has(item.noticeId));
@@ -695,6 +735,33 @@ export const createFileStore = async (filePath) => {
     async deleteDevice(id, institutionId) {
       state.devices = state.devices.filter((item) => !(item.id === id && item.institutionId === institutionId));
       await persist();
+    },
+    async getCheckinSettings(id) {
+      return clone(state.checkin[id] ?? OFF);
+    },
+    async setCheckinSettings(id, settings) {
+      state.checkin[id] = structuredClone(settings);
+      await persist();
+    },
+    async createStudentPass(pass) {
+      state.studentPasses.push(structuredClone(pass));
+      await persist();
+    },
+    async getStudentPass(tokenHash) {
+      return clone(state.studentPasses.find((item) => item.tokenHash === tokenHash));
+    },
+    async claimStudentPass(tokenHash) {
+      const before = state.studentPasses.length;
+      state.studentPasses = state.studentPasses.filter((item) => item.tokenHash !== tokenHash);
+      await persist();
+      return state.studentPasses.length < before;
+    },
+    async deleteStudentPasses(institutionId, studentId, kind) {
+      state.studentPasses = state.studentPasses.filter((item) => !(item.institutionId === institutionId && item.studentId === studentId && (!kind || item.kind === kind)));
+      await persist();
+    },
+    async listStudentPasses(institutionId, kind) {
+      return clone(state.studentPasses.filter((item) => item.institutionId === institutionId && item.kind === kind));
     },
     async listReaderIds(institutionId) {
       return clone(state.readerIds.filter((item) => item.institutionId === institutionId).map(({ readerId, studentId }) => ({ readerId, studentId })));

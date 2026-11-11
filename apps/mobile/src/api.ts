@@ -212,6 +212,65 @@ export const joinLink = (code: string) => {
   return `${origin}/join?code=${encodeURIComponent(code)}`;
 };
 
+export interface CheckinSettings {
+  enabled: boolean;
+  networks: { id: string; label: string; cidr: string }[];
+  yourIp: string;
+  onNetwork: string | null;
+}
+export interface CheckinStudent {
+  studentId: string;
+  name: string;
+  rollNo: string;
+  divisionId: string;
+  divisionName: string;
+  phone: boolean;
+}
+export interface StudentHome {
+  name: string;
+  rollNo: string;
+  className: string;
+  college: string;
+  enabled: boolean;
+  onNetwork: boolean;
+  session: { subject: string; slot: string; checkedIn: boolean } | null;
+}
+
+/** The address a student opens once on their phone. */
+export const checkinLink = (code: string) => {
+  const origin = Platform.OS === 'web' ? globalThis.location?.origin ?? '' : apiBase();
+  return `${origin}/checkin?code=${encodeURIComponent(code)}`;
+};
+
+const PHONE_KEY = 'timeflex.student';
+/** A student's phone has its own token, kept apart from any staff login on the same device. */
+const studentRequest = async <T>(path: string, method = 'GET', body?: unknown): Promise<T> => {
+  await whenLoaded();
+  const phone = await storage.get(PHONE_KEY);
+  let response: Response;
+  try {
+    response = await fetchWithin(`${apiBase()}${path}`, { method, headers: { 'Content-Type': 'application/json', ...(phone ? { Authorization: `Bearer ${phone}` } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }, 20000);
+  } catch {
+    throw new ApiError('Cannot reach TimeFlex. Check your connection.', 0);
+  }
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (response.status === 401 && phone) await storage.set(PHONE_KEY, null);
+    throw new ApiError(data?.error ?? `Request failed (${response.status})`, response.status);
+  }
+  return data as T;
+};
+export const studentApi = {
+  hasPhone: async () => Boolean(await storage.get(PHONE_KEY)),
+  peek: (code: string) => studentRequest<{ college: string; name: string; rollNo: string; className: string }>(`/api/student/v1/link/${encodeURIComponent(code)}`),
+  async claim(code: string) {
+    const { token } = await studentRequest<{ token: string }>('/api/student/v1/claim', 'POST', { code });
+    await storage.set(PHONE_KEY, token);
+  },
+  me: () => studentRequest<StudentHome>('/api/student/v1/me'),
+  tap: () => studentRequest<{ status: 'recorded' | 'already'; subject: string; slot: string }>('/api/student/v1/checkin', 'POST', {}),
+};
+
 export const api = {
   base: apiBase,
   peekInvite: (code: string) => request<{ college: string; teacher: string | null; role: string }>(`/api/auth/invite/${encodeURIComponent(code)}`),
@@ -231,6 +290,11 @@ export const api = {
   rotateCards: (id: string) => request(`/api/institutions/${id}/cards/rotate`, { method: 'POST', body: {} }),
   scan: (id: string, identifier: string, purpose: 'class' | 'gate') => request<ScanResult>(`/api/institutions/${id}/scans`, { method: 'POST', body: { identifier, purpose } }),
   listScans: (id: string, date: string) => request<ScanRecord[]>(`/api/institutions/${id}/scans?date=${encodeURIComponent(date)}`),
+  getCheckin: (id: string) => request<CheckinSettings>(`/api/institutions/${id}/checkin`),
+  saveCheckin: (id: string, body: { enabled: boolean; networks: CheckinSettings['networks'] }) => request<CheckinSettings>(`/api/institutions/${id}/checkin`, { method: 'PUT', body }),
+  listCheckinStudents: (id: string) => request<CheckinStudent[]>(`/api/institutions/${id}/checkin/students`),
+  makeCheckinLinks: (id: string, body: { studentId: string } | { divisionId: string }) => request<(CheckinStudent & { code: string })[]>(`/api/institutions/${id}/checkin/links`, { method: 'POST', body }),
+  unlinkCheckinStudent: (id: string, studentId: string) => request(`/api/institutions/${id}/checkin/students/${studentId}`, { method: 'DELETE' }),
   listReaderIds: (id: string) => request<ReaderLink[]>(`/api/institutions/${id}/reader-ids`),
   linkReaderIds: (id: string, body: { links: { readerId: string; studentId: string }[] } | { text: string }) => request<{ saved: number; problems: { line: string; reason: string }[] }>(`/api/institutions/${id}/reader-ids`, { method: 'POST', body }),
   unlinkReaderId: (id: string, readerId: string) => request(`/api/institutions/${id}/reader-ids/${encodeURIComponent(readerId)}`, { method: 'DELETE' }),

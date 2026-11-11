@@ -20,6 +20,7 @@ import {
   verifyAgainstDummy,
   verifyPassword,
 } from './auth.js';
+import { mountCheckinAdmin, mountStudentApi } from './checkin.js';
 import { mergeAttendance, mountAttendance, olderOnly, withAttendance } from './attendance.js';
 import { DuplicateEmailError } from './db.js';
 import { mountDeviceApi, mountDevices } from './devices.js';
@@ -47,7 +48,7 @@ const publicInstitution = ({ ownerId, ...institution }) => institution;
  * Every route except health, sign-up and login needs a session. An account owns its
  * institution, and every institution or timetable route checks that ownership.
  */
-export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter = createRateLimiter(), limits = {} }) => {
+export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter = createRateLimiter(), limits = {}, now = Date.now }) => {
   // Per address, and many people can share one: a whole college, or everyone on a Docker host that
   // hides real addresses. These only stop floods. Guessing one account has its own tight limit.
   const signupLimiter = limits.signup ?? createRateLimiter({ limit: 100, windowMs: 60 * MINUTE });
@@ -259,6 +260,7 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   };
 
   mountDeviceApi(app, { store, route, fail, limits });
+  mountStudentApi(app, { store, route, fail, limits, now });
 
   /* ---------- Everything below needs a session ---------- */
 
@@ -455,6 +457,7 @@ export const createApp = ({ store, solve = solveWithSolver, send, loginLimiter =
   mountEvents(app, { store, route, fail, memberAccess, ownedInstitution, limits });
   mountAttendance(app, { store, route, fail, memberAccess });
   mountDevices(app, { store, route, fail, memberAccess, ownedInstitution, limits });
+  mountCheckinAdmin(app, { store, route, fail, ownedInstitution, now });
   mountPlatform(app, { store, route, fail });
 
   app.use('/api', (request, response) => notFound(response, 'Page'));

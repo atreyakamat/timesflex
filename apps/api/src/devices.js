@@ -121,7 +121,7 @@ export const firstClass = (sessions, division, student, day) =>
     .sort((a, b) => minutesOf(a.slot) - minutesOf(b.slot))[0] ?? null;
 
 /** Saves scans for one college, remembering the day's scans so a batch costs few queries. */
-const scanRecorder = async (store, institution, { source, sourceId, gate }) => {
+export const scanRecorder = async (store, institution, { source, sourceId, gate }) => {
   const profile = profileOf(institution);
   const timeZone = profile.institution?.timezone ?? DEFAULT_ZONE;
   const grace = Number.isInteger(profile.institution?.lateAfterMinutes) ? profile.institution.lateAfterMinutes : DEFAULT_GRACE;
@@ -160,15 +160,16 @@ const scanRecorder = async (store, institution, { source, sourceId, gate }) => {
   };
 
   /** Returns false when this scan was already recorded. */
-  return async (found, at, scanId) => {
+  return async (found, at, scanId, { sessionId } = {}) => {
     const { student, division } = found;
     const local = localParts(at, timeZone);
     const today = await scansOn(local.date);
     const instant = new Date(at).getTime();
     const own = today.filter((scan) => scan.studentId === student.id);
     const id = crypto.createHash('sha256').update(`${sourceId}|${scanId ?? `${student.id}|${at}`}`).digest('hex').slice(0, 32);
-    if (own.some((scan) => scan.id === id || Math.abs(new Date(scan.at).getTime() - instant) < DOUBLE_TAP)) return false;
-    const scan = { id, studentId: student.id, studentName: student.name, rollNo: student.rollNo, divisionId: division.id, divisionName: division.name, at: new Date(at).toISOString(), date: local.date, time: local.time, source, gate: Boolean(gate), createdAt: new Date().toISOString() };
+    // A tap for a particular class is its own record, even moments after a gate scan.
+    if (own.some((scan) => scan.id === id || (!sessionId && Math.abs(new Date(scan.at).getTime() - instant) < DOUBLE_TAP))) return false;
+    const scan = { id, studentId: student.id, studentName: student.name, rollNo: student.rollNo, divisionId: division.id, divisionName: division.name, at: new Date(at).toISOString(), date: local.date, time: local.time, source, gate: Boolean(gate), ...(sessionId ? { sessionId } : {}), createdAt: new Date().toISOString() };
     if (!(await store.addScan(institution.id, scan))) return false;
     const firstToday = !own.some((item) => item.gate && new Date(item.at).getTime() < instant);
     today.push(scan);
@@ -180,7 +181,7 @@ const scanRecorder = async (store, institution, { source, sourceId, gate }) => {
   };
 };
 
-const publicScan = ({ id, studentId, studentName, rollNo, divisionId, divisionName, at, date, time, source }) => ({ id, studentId, studentName, rollNo, divisionId, divisionName, at, date, time, source });
+const publicScan = ({ id, studentId, studentName, rollNo, divisionId, divisionName, at, date, time, source, sessionId }) => ({ id, studentId, studentName, rollNo, divisionId, divisionName, at, date, time, source, ...(sessionId ? { sessionId } : {}) });
 
 /** What other software gets: plain names instead of internal ids. */
 const integrationViews = (institution) => {
