@@ -1,0 +1,28 @@
+{
+  "timeflexUrl": "https://your-timeflex-address",
+  "utcOffset": "+05:30",
+  "queueFile": "/data/queue.json",
+  "flushSeconds": 15,
+  "sources": [
+    {
+      "type": "zkteco-adms",
+      "name": "main-gate",
+      "port": 8081,
+      "serials": ["PUT-THE-MACHINE-SERIAL-HERE"]
+    },
+    {
+      "type": "folder",
+      "name": "attendance-software",
+      "path": "/inbox",
+      "every": 60
+    },
+    {
+      "type": "webhook",
+      "name": "cloud-service",
+      "port": 8082,
+      "path": "/punch",
+      "secret": "CHANGE-ME-to-a-long-random-string",
+      "fields": { "id": "employeeNo", "time": "punchTime" }
+    }
+  ]
+}

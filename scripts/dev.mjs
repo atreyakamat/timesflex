@@ -22,7 +22,7 @@ const services = [
     args: ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000'],
     cwd: 'services/solver',
   },
-  { name: 'api', color: 36, command: process.execPath, args: ['--watch-path=src', 'src/index.js'], cwd: 'apps/api' },
+  { name: 'api', color: 36, command: process.execPath, args: ['--env-file-if-exists=.env', '--watch-path=src', 'src/index.js'], cwd: 'apps/api' },
   {
     name: 'web',
     color: 32,

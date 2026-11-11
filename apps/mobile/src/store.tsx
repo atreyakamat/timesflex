@@ -1,0 +1,681 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  applyActions,
+  buildCoverUpdate,
+  buildSlots,
+  buildTimetableUpdate,
+  repairRooms,
+  sessionsWithoutRoom,
+  buildSolverRequest,
+  emptyModel,
+  emptyOperations,
+  featuresOf,
+  findConflicts,
+  hasLearned,
+  learnFromChoice,
+  learnFromMove,
+  sampleInstitute,
+  timetableDrift,
+  setupProblems,
+  solverWeights,
+  styleLabel,
+  type Account,
+  type AccountSession,
+  type AgentAction,
+  type Conflict,
+  type InstitutionRecord,
+  type NoticeRecord,
+  type PublishedTimetable,
+  type TimetableDrift,
+  type TimetableUpdate,
+  type OperationsData,
+  type PreferenceModel,
+  type ProfileData,
+  type ScheduledSession,
+  type SessionRequest,
+  type TimetableRecord,
+  type VariantStyle,
+} from '@core';
+import { ApiError, api, loadToken, setUnauthorizedHandler } from './api';
+
+/** The institution profile plus what the assistant has learned about the coordinator. */
+export type Profile = ProfileData & { learning: PreferenceModel; selectedVersionId?: string; published?: PublishedTimetable };
+
+/** 'yours' = balanced plus the learned weights. */
+export type GenerateStyle = VariantStyle | 'yours';
+
+const blankProfile = (name = '', type: Profile['institution']['type'] = 'college'): Profile => ({
+  institution: {
+    name,
+    type,
+    workingDays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+    startTime: '09:00',
+    endTime: '16:00',
+    slotDurationMinutes: 60,
+    breakAfterSlots: 3,
+    breakDurationMinutes: 30,
+  },
+  department: { name: '', yearLabel: '', semesterLabel: '' },
+  divisions: [],
+  teachers: [],
+  rooms: [],
+  subjects: [],
+  operations: emptyOperations(),
+  learning: emptyModel(),
+});
+
+const profileFrom = (record: InstitutionRecord): Profile => {
+  const data = ((record.data as any)?.profile ?? record.data ?? {}) as Partial<Profile>;
+  const base = blankProfile(record.name, record.type);
+  return {
+    ...base,
+    ...data,
+    institution: { ...base.institution, ...(data.institution ?? {}), name: data.institution?.name || record.name },
+    department: { ...base.department, ...(data.department ?? {}) },
+    divisions: data.divisions ?? [],
+    teachers: data.teachers ?? [],
+    rooms: data.rooms ?? [],
+    subjects: data.subjects ?? [],
+    operations: { ...emptyOperations(), ...(data.operations ?? {}) },
+    learning: { ...emptyModel(), ...(data.learning ?? {}) },
+  };
+};
+
+type SaveState = 'saved' | 'saving' | 'error';
+
+interface Store {
+  ready: boolean;
+  account: Account | null;
+  role: 'admin' | 'teacher' | null;
+  teacherId: string | null;
+  /** The central admin has paused this college. */
+  paused: boolean;
+  joinCollege: (body: { code: string; name: string; email: string; password: string }) => Promise<void>;
+  institutionId: string | null;
+  profile: Profile;
+  slots: string[];
+  names: Record<string, string>;
+  problems: string[];
+  versions: TimetableRecord[];
+  current: TimetableRecord | null;
+  sessions: ScheduledSession[];
+  /** The version daily tools use: approved if there is one, else the newest. */
+  liveSessions: ScheduledSession[];
+  liveVersion: TimetableRecord | null;
+  /** Who needs telling what, compared with what they last heard. */
+  pendingUpdate: TimetableUpdate;
+  sessionsNeedingRoom: ScheduledSession[];
+  /** How the live timetable differs from the setup. */
+  drift: TimetableDrift;
+  /** Couldn't reach the server on opening. The login is kept, so it can be tried again. */
+  loadError: string;
+  retryLoad: () => void;
+  dismissLoadError: () => void;
+  unplaced: SessionRequest[];
+  diagnostics: string[];
+  conflicts: Conflict[];
+  saveState: SaveState;
+  busy: string | null;
+  isNew: boolean;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (body: Parameters<typeof api.signUp>[0]) => Promise<void>;
+  startDemo: () => Promise<void>;
+  signOut: () => Promise<void>;
+  update: (change: (profile: Profile) => Profile) => void;
+  updateOperations: (change: (ops: OperationsData) => OperationsData) => void;
+  /** Saves a register straight away, for teachers and the office alike. */
+  takeAttendance: (date: string, session: ScheduledSession, absentStudentIds: string[]) => Promise<void>;
+  loadSample: () => void;
+  /** Apply what the assistant proposed (after the person approved it). Returns a line about any run. */
+  applyAgent: (actions: AgentAction[]) => Promise<string | null>;
+  generate: (style?: GenerateStyle, alternative?: boolean) => Promise<string>;
+  generateVariants: (styles: GenerateStyle[]) => Promise<string>;
+  selectVersion: (id: string) => void;
+  /** Select a version and learn that it was preferred over the others shown. */
+  chooseVersion: (id: string, comparedWith: string[]) => void;
+  setApproved: (approved: boolean) => Promise<void>;
+  moveSession: (id: string, patch: Partial<ScheduledSession>) => void;
+  /** Gives classes that lost their room a free one. Returns how many it couldn't place. */
+  fixRooms: () => number;
+  /** Saves any waiting changes immediately. */
+  saveNow: () => Promise<void>;
+  /** Records the pending update, and treats it as what teachers now know. */
+  publishUpdate: () => Promise<NoticeRecord | null>;
+  /** Brings the timetable in line with the setup, without moving anything that's still right. */
+  fillTimetable: () => Promise<string>;
+  /** Removes classes, subjects, teachers, rooms and timetables. The account stays. */
+  startOver: (sample?: boolean) => Promise<void>;
+  coverUpdate: (date: string) => Promise<NoticeRecord | null>;
+  finishOnboarding: () => void;
+}
+
+const StoreContext = createContext<Store | null>(null);
+
+export function StoreProvider({ children }: { children: ReactNode }) {
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [account, setAccount] = useState<Account | null>(null);
+  const [role, setRole] = useState<'admin' | 'teacher' | null>(null);
+  const [teacherId, setTeacherId] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
+  const readOnly = useRef(false);
+  const [institutionId, setInstitutionId] = useState<string | null>(null);
+  const [profile, setProfile] = useState<Profile>(blankProfile());
+  const [versions, setVersions] = useState<TimetableRecord[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ScheduledSession[]>([]);
+  const [unplaced, setUnplaced] = useState<SessionRequest[]>([]);
+  const [diagnostics, setDiagnostics] = useState<string[]>([]);
+  const [saveState, setSaveState] = useState<SaveState>('saved');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [isNew, setIsNew] = useState(false);
+  const profileDirty = useRef(false);
+  const opsDirty = useRef(false);
+  const sessionsDirty = useRef(false);
+  // A failed save is tried again, so a dropped connection doesn't lose work.
+  const [retry, setRetry] = useState(0);
+  const failed = useCallback(() => {
+    setSaveState('error');
+    setTimeout(() => setRetry((n) => n + 1), 8000);
+  }, []);
+
+  const reset = useCallback(() => {
+    setAccount(null);
+    setRole(null);
+    setTeacherId(null);
+    setPaused(false);
+    readOnly.current = false;
+    setInstitutionId(null);
+    setProfile(blankProfile());
+    setVersions([]);
+    setCurrentId(null);
+    setSessions([]);
+    setUnplaced([]);
+    setDiagnostics([]);
+  }, []);
+
+  const open = useCallback(async (session: AccountSession, fresh: boolean) => {
+    setAccount(session.account);
+    setRole(session.role ?? null);
+    setTeacherId(session.teacherId ?? null);
+    const isPaused = (session.institution as { status?: string } | null)?.status === 'paused';
+    setPaused(isPaused);
+    readOnly.current = session.role === 'teacher';
+    setIsNew(fresh && session.role !== 'teacher');
+    if (!session.institution) return;
+    setInstitutionId(session.institution.id);
+    if (isPaused) return;
+    if (session.role === 'teacher') {
+      // Teachers get a plain view: names, class lists and the approved timetable.
+      const [room, attendance] = await Promise.all([api.classroom(session.institution.id), api.listAttendance(session.institution.id).catch(() => [])]);
+      const base = blankProfile(room.name);
+      setProfile({
+        ...base,
+        institution: { ...base.institution, ...(room.institution as object), name: room.name } as Profile['institution'],
+        divisions: room.divisions as unknown as Profile['divisions'],
+        teachers: room.teachers as unknown as Profile['teachers'],
+        rooms: room.rooms as unknown as Profile['rooms'],
+        subjects: room.subjects as unknown as Profile['subjects'],
+        operations: { ...emptyOperations(), attendance, substitutions: room.covering ?? [] },
+      });
+      const live = { id: 'live', label: 'Timetable', status: 'approved', generatedSessions: room.sessions } as unknown as TimetableRecord;
+      setVersions([live]);
+      setCurrentId('live');
+      setSessions(live.generatedSessions);
+      return;
+    }
+    setProfile(profileFrom(session.institution));
+    profileDirty.current = false;
+    opsDirty.current = false;
+    const all = await api.listTimetables(session.institution.id).catch(() => [] as TimetableRecord[]);
+    setVersions(all);
+    const chosen = profileFrom(session.institution).selectedVersionId;
+    const pick =
+      all.find((v) => v.status === 'approved') ??
+      all.find((v) => v.id === chosen && v.generatedSessions?.length) ??
+      all.find((v) => v.generatedSessions?.length);
+    if (pick) {
+      setCurrentId(pick.id);
+      setSessions(pick.generatedSessions);
+    }
+  }, []);
+
+  const load = useCallback(() => {
+    setReady(false);
+    setLoadError('');
+    loadToken()
+      .then((token) => (token ? api.me().then((session) => open(session, false)) : undefined))
+      .catch((e) => {
+        // A dropped connection isn't being signed out: keep the login and offer to try again.
+        if (e instanceof ApiError && e.status === 401) reset();
+        else setLoadError(e instanceof Error ? e.message : 'Could not reach the server.');
+      })
+      .finally(() => setReady(true));
+  }, [open, reset]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(reset);
+    load();
+  }, [load, reset]);
+
+  // Autosave the profile, operations and hand edits, each a moment after the last change.
+  useEffect(() => {
+    if (!institutionId || !profileDirty.current) return;
+    setSaveState('saving');
+    const timer = setTimeout(() => {
+      const { operations: _ops, ...rest } = profile;
+      api
+        .saveProfile(institutionId, {
+          name: profile.institution.name || 'Untitled institution',
+          type: profile.institution.type,
+          profile: { ...rest, operations: profile.operations },
+        })
+        .then(() => {
+          profileDirty.current = false;
+          setSaveState('saved');
+        })
+        .catch(failed);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [profile, institutionId, retry, failed]);
+
+  useEffect(() => {
+    if (!institutionId || !opsDirty.current) return;
+    const timer = setTimeout(() => {
+      api
+        .saveOperations(institutionId, profile.operations)
+        .then(() => {
+          opsDirty.current = false;
+          if (!profileDirty.current && !sessionsDirty.current) setSaveState('saved');
+        })
+        .catch(failed);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [profile.operations, institutionId, retry, failed]);
+
+  useEffect(() => {
+    if (!currentId || !sessionsDirty.current) return;
+    const timer = setTimeout(() => {
+      api
+        .updateTimetable(currentId, { generatedSessions: sessions })
+        .then((saved) => {
+          sessionsDirty.current = false;
+          setVersions((list) => list.map((v) => (v.id === saved.id ? saved : v)));
+          if (!profileDirty.current && !opsDirty.current) setSaveState('saved');
+        })
+        .catch(failed);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [sessions, currentId, retry, failed]);
+
+  // In a browser, warn before closing with changes that haven't reached the server.
+  useEffect(() => {
+    const target = globalThis as unknown as { addEventListener?: (name: string, handler: (event: { preventDefault: () => void }) => void) => void; removeEventListener?: (name: string, handler: (event: { preventDefault: () => void }) => void) => void };
+    if (!target.addEventListener) return;
+    const warn = (event: { preventDefault: () => void }) => {
+      if (profileDirty.current || opsDirty.current || sessionsDirty.current) event.preventDefault();
+    };
+    target.addEventListener('beforeunload', warn);
+    return () => target.removeEventListener?.('beforeunload', warn);
+  }, []);
+
+  const slots = useMemo(
+    () =>
+      buildSlots(
+        profile.institution.startTime,
+        profile.institution.endTime,
+        profile.institution.slotDurationMinutes,
+        profile.institution.breakAfterSlots,
+        profile.institution.breakDurationMinutes,
+      ),
+    [profile.institution],
+  );
+  const names = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const item of [...profile.divisions, ...profile.teachers, ...profile.rooms, ...profile.subjects]) map[item.id] = item.name;
+    return map;
+  }, [profile]);
+  const problems = useMemo(
+    () => setupProblems({ days: profile.institution.workingDays, slots, ...profile }),
+    [profile, slots],
+  );
+  const conflicts = useMemo(
+    () => findConflicts(sessions, { days: profile.institution.workingDays, slots, teachers: profile.teachers, rooms: profile.rooms, names }),
+    [sessions, profile, slots, names],
+  );
+  const current = versions.find((v) => v.id === currentId) ?? null;
+  const live = versions.find((v) => v.status === 'approved') ?? versions.find((v) => v.generatedSessions?.length);
+  const liveSessions = useMemo(() => (live ? (live.id === currentId ? sessions : live.generatedSessions) : []), [live, currentId, sessions]);
+  const pendingUpdate = useMemo(() => buildTimetableUpdate({ published: profile.published, sessions: liveSessions, profile, slots }), [profile, liveSessions, slots]);
+  const sessionsNeedingRoom = useMemo(() => sessionsWithoutRoom(liveSessions, profile.rooms), [liveSessions, profile.rooms]);
+  const drift = useMemo(() => timetableDrift(profile, liveSessions), [profile, liveSessions]);
+
+  const update = useCallback((change: (profile: Profile) => Profile) => {
+    if (readOnly.current) return;
+    profileDirty.current = true;
+    setProfile((p) => change(p));
+  }, []);
+  const updateOperations = useCallback((change: (ops: OperationsData) => OperationsData) => {
+    opsDirty.current = true;
+    setProfile((p) => ({ ...p, operations: change(p.operations) }));
+  }, []);
+
+  const solveOne = useCallback(
+    async (style: GenerateStyle, number: number, alternative = false, base = profile, timeLimitSeconds?: number) => {
+      if (!institutionId) throw new Error('Sign in first.');
+      const locked = sessions.filter((s) => s.locked);
+      const request = buildSolverRequest({
+        days: base.institution.workingDays,
+        slots: buildSlots(base.institution.startTime, base.institution.endTime, base.institution.slotDurationMinutes, base.institution.breakAfterSlots, base.institution.breakDurationMinutes),
+        divisions: base.divisions,
+        teachers: base.teachers,
+        rooms: base.rooms,
+        subjects: base.subjects,
+        locked,
+        style: style === 'yours' ? 'balanced' : style,
+        ...(style === 'yours' ? { weights: solverWeights(base.learning) } : {}),
+        ...(alternative ? { seed: Math.floor(Math.random() * 100000) } : {}),
+        ...(timeLimitSeconds ? { timeLimitSeconds } : {}),
+      });
+      const label = `Version ${number} · ${style === 'yours' ? 'Your style' : styleLabel(style)}${alternative ? ' (alt)' : ''}`;
+      const record = await api.createTimetable(institutionId, { label, request });
+      return api.solve(record.id);
+    },
+    [institutionId, profile, sessions],
+  );
+
+  const show = (record: TimetableRecord, missing: SessionRequest[] = [], notes: string[] = []) => {
+    setCurrentId(record.id);
+    setSessions(record.generatedSessions ?? []);
+    sessionsDirty.current = false;
+    setUnplaced(missing);
+    setDiagnostics(notes);
+  };
+
+  const generate = useCallback(
+    async (style: GenerateStyle = 'balanced', alternative = false, base = profile) => {
+      setBusy('Building your timetable…');
+      try {
+        const { timetable, solver } = await solveOne(style, versions.length + 1, alternative, base);
+        setVersions((list) => [timetable, ...list]);
+        show(timetable, solver.unscheduled_sessions, solver.diagnostics ?? []);
+        return solver.status === 'ok'
+          ? `All ${solver.scheduled_sessions.length} sessions placed, no clashes.`
+          : `Placed ${solver.scheduled_sessions.length}; ${solver.unscheduled_sessions.length} could not fit. See the notes.`;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [solveOne, versions.length, profile],
+  );
+
+  const generateVariants = useCallback(
+    async (styles: GenerateStyle[], base = profile) => {
+      const made: TimetableRecord[] = [];
+      let last: { unscheduled_sessions: SessionRequest[]; diagnostics?: string[] } | null = null;
+      let short = 0;
+      try {
+        for (const [index, style] of styles.entries()) {
+          setBusy(`Building version ${index + 1} of ${styles.length}…`);
+          // Several versions at once: a shorter search each keeps the wait reasonable.
+          const { timetable, solver } = await solveOne(style, versions.length + made.length + 1, false, base, 6);
+          made.unshift(timetable);
+          last = solver;
+          if (solver.unscheduled_sessions.length) short += 1;
+        }
+        setVersions((list) => [...made, ...list]);
+        // The first version built is the one shown, so show its notes too: `last` is only the final one.
+        if (made.length) show(made[made.length - 1], made.length === 1 ? (last?.unscheduled_sessions ?? []) : [], made.length === 1 ? (last?.diagnostics ?? []) : []);
+        const ready = `${made.length} versions ready to compare.`;
+        return short ? `${ready} In ${short} of them some classes could not fit, so check who is overloaded before approving.` : ready;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [solveOne, versions.length, profile],
+  );
+
+  const applyAgent = useCallback(
+    async (actions: AgentAction[]) => {
+      const next = applyActions(profile, actions) as Profile;
+      if (next !== profile) {
+        const opsChanged = next.operations !== profile.operations;
+        profileDirty.current = true;
+        if (opsChanged) opsDirty.current = true;
+        setProfile(next);
+      }
+      const run = actions.find((a) => a.type === 'generate' || a.type === 'generateVariants');
+      if (!run) return null;
+      if (run.type === 'generate') return generate(run.style, false, next);
+      return generateVariants(hasLearned(next.learning) ? [...run.styles, 'yours'] : run.styles, next);
+    },
+    [profile, generate, generateVariants],
+  );
+
+  const persistProfile = (next: Profile) =>
+    api.saveProfile(institutionId!, { name: next.institution.name || 'Untitled institution', type: next.institution.type, profile: next as unknown as Record<string, unknown> });
+  /** Teachers must exist on the server before they can be messaged, and it reads their numbers from there. */
+  const saveNow = async () => {
+    if (!institutionId) return;
+    if (profileDirty.current) {
+      await persistProfile(profile);
+      profileDirty.current = false;
+    }
+    if (opsDirty.current) {
+      await api.saveOperations(institutionId, profile.operations);
+      opsDirty.current = false;
+    }
+    if (sessionsDirty.current && currentId) {
+      const saved = await api.updateTimetable(currentId, { generatedSessions: sessions });
+      sessionsDirty.current = false;
+      setVersions((list) => list.map((v) => (v.id === saved.id ? saved : v)));
+    }
+    setSaveState('saved');
+  };
+
+  const days = profile.institution.workingDays;
+  const value: Store = {
+    ready,
+    account,
+    role,
+    teacherId,
+    paused,
+    joinCollege: async (body) => open(await api.join(body), true),
+    institutionId,
+    profile,
+    slots,
+    names,
+    problems,
+    versions,
+    current,
+    sessions,
+    liveSessions,
+    liveVersion: live ?? null,
+    pendingUpdate,
+    sessionsNeedingRoom,
+    drift,
+    loadError,
+    retryLoad: load,
+    dismissLoadError: () => {
+      setLoadError('');
+      reset();
+    },
+    unplaced,
+    diagnostics,
+    conflicts,
+    saveState,
+    busy,
+    isNew,
+    signIn: async (email, password) => open(await api.signIn(email, password), false),
+    signUp: async (body) => open(await api.signUp(body), true),
+    startDemo: async () => open(await api.startDemo(), true),
+    signOut: async () => {
+      await api.signOut().catch(() => {});
+      reset();
+    },
+    update,
+    updateOperations,
+    takeAttendance: async (date, session, absentStudentIds) => {
+      if (!institutionId) throw new Error('Sign in first.');
+      // A student added a moment ago has to reach the server before they can be marked.
+      await saveNow();
+      const record = await api.takeAttendance(institutionId, { date, sessionId: session.id, absentStudentIds });
+      setProfile((p) => ({
+        ...p,
+        operations: { ...p.operations, attendance: [...p.operations.attendance.filter((item) => !(item.date === date && item.sessionId === session.id)), record] },
+      }));
+    },
+    loadSample: () => {
+      const sample = sampleInstitute();
+      update((p) => ({ ...p, ...sample, institution: { ...sample.institution, name: p.institution.name || sample.institution.name, type: p.institution.type } }));
+    },
+    applyAgent,
+    generate: (style, alternative) => generate(style, alternative),
+    generateVariants: (styles) => generateVariants(styles),
+    selectVersion: (id) => {
+      const record = versions.find((v) => v.id === id);
+      if (!record) return;
+      update((p) => ({ ...p, selectedVersionId: id }));
+      show(record);
+    },
+    chooseVersion: (id, comparedWith) => {
+      const chosen = versions.find((v) => v.id === id);
+      if (!chosen) return;
+      const others = versions.filter((v) => comparedWith.includes(v.id) && v.id !== id && v.generatedSessions?.length);
+      if (others.length) {
+        update((p) => ({
+          ...p,
+          learning: learnFromChoice(
+            p.learning,
+            featuresOf(chosen.generatedSessions, days, slots),
+            others.map((v) => featuresOf(v.generatedSessions, days, slots)),
+            `You chose ${chosen.label.split('·')[1]?.trim() ?? chosen.label}`,
+          ),
+        }));
+      }
+      update((p) => ({ ...p, selectedVersionId: id }));
+      show(chosen);
+    },
+    setApproved: async (approved) => {
+      if (!currentId) return;
+      const saved = await api.updateTimetable(currentId, { generatedSessions: sessions, status: approved ? 'approved' : 'edited' });
+      sessionsDirty.current = false;
+      setVersions((list) => list.map((v) => (v.id === saved.id ? saved : v)));
+    },
+    moveSession: (id, patch) => {
+      const before = sessions.find((s) => s.id === id);
+      if (before && (patch.day || patch.slot)) {
+        const toDay = patch.day ?? before.day;
+        const toSlot = slots.indexOf(patch.slot ?? before.slot);
+        update((p) => ({
+          ...p,
+          learning: learnFromMove(p.learning, {
+            fromDay: before.day,
+            fromSlot: slots.indexOf(before.slot),
+            toDay,
+            toSlot,
+            lastSlot: slots.length - 1,
+            teacherAlreadyThere: sessions.some((s) => s.id !== id && s.teacher_id === before.teacher_id && s.day === toDay),
+          }),
+        }));
+      }
+      sessionsDirty.current = true;
+      setSessions((list) => list.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+    },
+    finishOnboarding: () => setIsNew(false),
+    fixRooms: () => {
+      const result = repairRooms(sessions, profile.rooms, slots);
+      sessionsDirty.current = true;
+      setSessions(result.sessions);
+      return result.unfixed;
+    },
+    saveNow,
+    fillTimetable: async () => {
+      if (!institutionId || !live) throw new Error('There is no timetable to update yet.');
+      await saveNow();
+      const wasApproved = live.status === 'approved';
+      const { kept, missing, stale, reassigned } = timetableDrift(profile, liveSessions);
+      const { sessions: settled } = repairRooms(kept, profile.rooms, slots);
+      const removed = stale.length ? ` Removed ${stale.length}.` : '';
+      const newTeacher = reassigned ? ` Updated the teacher on ${reassigned}.` : '';
+      if (!missing) {
+        const saved = await api.updateTimetable(live.id, { generatedSessions: settled });
+        setVersions((list) => list.map((v) => (v.id === saved.id ? saved : v)));
+        show(saved);
+        return `Timetable updated.${removed}${newTeacher}`;
+      }
+      setBusy('Adding the new classes…');
+      try {
+        const wasLocked = new Set(settled.filter((s) => s.locked).map((s) => s.id));
+        const request = buildSolverRequest({
+          days,
+          slots,
+          divisions: profile.divisions,
+          teachers: profile.teachers,
+          rooms: profile.rooms,
+          subjects: profile.subjects,
+          locked: settled,
+          style: 'balanced',
+          timeLimitSeconds: 8,
+        });
+        const label = `${live.label.replace(/ \(updated\)$/, '')} (updated)`;
+        const record = await api.createTimetable(institutionId, { label, request });
+        const { solver } = await api.solve(record.id);
+        // Pins were only there for this search: they shouldn't show as locks afterwards.
+        const placed = solver.scheduled_sessions.map((s) => ({ ...s, locked: wasLocked.has(s.id) }));
+        const saved = await api.updateTimetable(record.id, { generatedSessions: placed, status: wasApproved ? 'approved' : 'edited' });
+        const previous = wasApproved ? await api.updateTimetable(live.id, { status: 'edited' }) : live;
+        setVersions((list) => [saved, ...list.map((v) => (v.id === previous.id ? previous : v))]);
+        show(saved, solver.unscheduled_sessions, solver.diagnostics ?? []);
+        update((p) => ({ ...p, selectedVersionId: saved.id }));
+        const added = placed.length - settled.length;
+        return solver.unscheduled_sessions.length
+          ? `Added ${added}, but ${solver.unscheduled_sessions.length} couldn’t fit. See the notes.${removed}`
+          : `Added ${added} new class${added === 1 ? '' : 'es'}. Everything else stayed where it was.${removed}${newTeacher}`;
+      } finally {
+        setBusy(null);
+      }
+    },
+    startOver: async (sample) => {
+      if (!institutionId) return;
+      await api.clearInstitution(institutionId);
+      setVersions([]);
+      setCurrentId(null);
+      setSessions([]);
+      setUnplaced([]);
+      setDiagnostics([]);
+      sessionsDirty.current = false;
+      const name = profile.institution.name;
+      const type = profile.institution.type;
+      const fresh = sample ? ({ ...blankProfile(name, type), ...sampleInstitute() } as Profile) : blankProfile(name, type);
+      const next = { ...fresh, institution: { ...fresh.institution, name, type } };
+      setProfile(next);
+      profileDirty.current = false;
+      await persistProfile(next);
+    },
+    publishUpdate: async () => {
+      if (!institutionId || !live || !pendingUpdate.recipients.length) return null;
+      await saveNow();
+      const notice = await api.createNotice(institutionId, pendingUpdate);
+      const published: PublishedTimetable = { versionId: live.id, at: new Date().toISOString(), sessions: liveSessions, names };
+      const next = { ...profile, published };
+      setProfile(next);
+      await persistProfile(next);
+      return notice;
+    },
+    coverUpdate: async (date) => {
+      if (!institutionId) return null;
+      await saveNow();
+      const update = buildCoverUpdate({ date, ops: profile.operations, sessions: liveSessions, profile, slots });
+      return update.recipients.length ? api.createNotice(institutionId, update) : null;
+    },
+  };
+
+  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+}
+
+export const useStore = () => {
+  const store = useContext(StoreContext);
+  if (!store) throw new Error('useStore must be used inside StoreProvider');
+  return store;
+};

@@ -1,0 +1,175 @@
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { Pressable, View } from 'react-native';
+import { attendanceSummary, effectiveTeacher, findAttendance, firstScans, formatDateKey, notScanned, sessionsOnDay, studentsFor, toDateKey, weekdayOf, type ScanRecord } from '@core';
+import { api } from '../src/api';
+import { useStore } from '../src/store';
+import { radius, space, useTheme } from '../src/theme';
+import { Button, Card, Chip, Empty, IconButton, Pill, Row, Screen, Segmented, T, useToast } from '../src/ui';
+
+/** Every period is a register: tap the students who are absent, save, move on. */
+export default function Attendance() {
+  const params = useLocalSearchParams<{ date?: string; session?: string }>();
+  const { profile, liveSessions, slots, names, role, teacherId, institutionId, takeAttendance } = useStore();
+  const { c } = useTheme();
+  const toast = useToast();
+  const [date] = useState(params.date ?? toDateKey(new Date()));
+  const isTeacher = role === 'teacher';
+  // A teacher takes the register for their own classes and any they've been asked to cover.
+  const today = sessionsOnDay(liveSessions, weekdayOf(date), slots).filter((s) => !isTeacher || s.teacher_id === teacherId || effectiveTeacher(s, date, profile.operations.substitutions) === teacherId);
+  const initial = today.find((s) => s.id === params.session);
+  const divisions = isTeacher ? profile.divisions.filter((d) => today.some((s) => s.division_id === d.id)) : profile.divisions;
+  const [divisionId, setDivisionId] = useState(initial?.division_id ?? today[0]?.division_id ?? divisions.find((d) => d.students?.length)?.id ?? divisions[0]?.id ?? '');
+  const classSessions = today.filter((s) => s.division_id === divisionId);
+  const [sessionId, setSessionId] = useState(initial?.id ?? classSessions[0]?.id ?? '');
+  const session = classSessions.find((s) => s.id === sessionId) ?? classSessions[0];
+  const division = profile.divisions.find((d) => d.id === divisionId);
+  const students = studentsFor(division, session?.batch);
+  const [absent, setAbsent] = useState<string[]>([]);
+  const [tab, setTab] = useState<'take' | 'report'>('take');
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [scans, setScans] = useState<ScanRecord[]>([]);
+
+  const loadScans = useCallback(() => {
+    if (institutionId) api.listScans(institutionId, date).then(setScans).catch(() => setScans([]));
+  }, [institutionId, date]);
+  useFocusEffect(loadScans);
+
+  // A phone tap counts for its own class. Gate and card scans count for the day.
+  const relevant = scans.filter((scan) => !scan.sessionId || scan.sessionId === session?.id);
+  const scanned = firstScans(relevant);
+  const missing = notScanned(students, relevant);
+  const save = async () => {
+    if (!session) return;
+    setSaving(true);
+    try {
+      await takeAttendance(date, session, absent);
+      setSaved(true);
+    } catch (e) {
+      toast.show(e instanceof Error ? e.message : 'Could not save the register.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    setAbsent(session ? findAttendance(profile.operations.attendance, date, session.id)?.absentStudentIds ?? [] : []);
+    setSaved(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
+
+  const summary = division ? attendanceSummary(division, profile.operations.attendance) : [];
+
+  return (
+    <Screen>
+      <Row gap={12} style={{ marginBottom: space.lg }}>
+        <IconButton icon="arrow-back" label="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/today'))} />
+        <View>
+          <T v="h1">Attendance</T>
+          <T v="small">{formatDateKey(date)}</T>
+        </View>
+      </Row>
+      <Segmented
+        options={[
+          { value: 'take', label: 'Take' },
+          { value: 'report', label: 'Report' },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      <Row wrap gap={8} style={{ marginTop: space.md }}>
+        {divisions.map((d) => (
+          <Chip key={d.id} label={d.name} active={d.id === divisionId} onPress={() => setDivisionId(d.id)} />
+        ))}
+      </Row>
+
+      {!division?.students?.length ? (
+        <View style={{ marginTop: space.lg }}>
+          <Empty icon="list-outline" title="No class list yet" text="Add the students to this class (roll number and name) and every period becomes a register." />
+        </View>
+      ) : tab === 'take' ? (
+        <View style={{ marginTop: space.lg, gap: space.md }}>
+          {!classSessions.length ? (
+            <Empty icon="calendar-outline" title={isTeacher ? 'You have no classes with them on this day' : `${division.name} has no classes on this day`} />
+          ) : (
+            <>
+              <Row wrap gap={8}>
+                {classSessions.map((s) => (
+                  <Chip
+                    key={s.id}
+                    label={`${s.slot.split('-')[0]} ${names[s.subject_id]}${s.batch ? ` (${s.batch})` : ''}`}
+                    active={s.id === session?.id}
+                    icon={findAttendance(profile.operations.attendance, date, s.id) ? 'checkmark-circle' : undefined}
+                    onPress={() => setSessionId(s.id)}
+                  />
+                ))}
+              </Row>
+              <Row style={{ justifyContent: 'space-between' }}>
+                <T v="h3">Tap the students who are absent</T>
+                <Pill label={`${students.length - absent.length}/${students.length} present`} tone="ok" />
+              </Row>
+              <Row wrap gap={8}>
+                <Button label="Scan cards" kind="secondary" size="sm" icon="qr-code-outline" onPress={() => router.push('/scan')} />
+                {scanned.size && missing.length ? (
+                  <Button
+                    label={`Mark the ${missing.length} not scanned absent`}
+                    kind="secondary"
+                    size="sm"
+                    onPress={() => {
+                      setSaved(false);
+                      setAbsent(missing.map((student) => student.id));
+                    }}
+                  />
+                ) : null}
+              </Row>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {students.map((student) => {
+                  const off = absent.includes(student.id);
+                  return (
+                    <Pressable
+                      key={student.id}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: off }}
+                      accessibilityLabel={`${student.name}, ${off ? 'absent' : 'present'}`}
+                      onPress={() => {
+                        setSaved(false);
+                        setAbsent((list) => (off ? list.filter((x) => x !== student.id) : [...list, student.id]));
+                      }}
+                      style={{ width: 150, flexGrow: 1, padding: 10, borderRadius: radius.md, borderWidth: 1, borderColor: off ? c.danger : c.border, backgroundColor: off ? c.dangerSoft : c.okSoft }}
+                    >
+                      <T v="mono">{student.rollNo}</T>
+                      <T v="label" color={off ? c.danger : c.text} style={off ? { textDecorationLine: 'line-through' } : undefined}>
+                        {student.name}
+                      </T>
+                      {scanned.has(student.id) ? <T v="small">Scanned {scanned.get(student.id)}</T> : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Button
+                label={saved ? 'Saved ✓' : `Save · ${absent.length} absent`}
+                size="lg"
+                loading={saving}
+                onPress={save}
+              />
+            </>
+          )}
+        </View>
+      ) : (
+        <Card style={{ marginTop: space.lg, gap: 6 }}>
+          {summary.map((row) => (
+            <Row key={row.student.id} style={{ justifyContent: 'space-between' }}>
+              <T v="label" style={{ flex: 1 }} numberOfLines={1}>
+                {row.student.rollNo} · {row.student.name}
+              </T>
+              <T v="label" color={row.percent !== null && row.percent < 75 ? c.danger : c.text}>
+                {row.percent === null ? '—' : `${row.percent}% (${row.attended}/${row.total})`}
+              </T>
+            </Row>
+          ))}
+        </Card>
+      )}
+    </Screen>
+  );
+}

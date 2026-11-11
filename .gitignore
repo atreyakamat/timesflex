@@ -14,3 +14,7 @@ __pycache__
 
 # Local file store used when DATABASE_URL is not set
 apps/api/data
+*.tsbuildinfo
+
+# Android build output
+dist-apk

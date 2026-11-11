@@ -1,0 +1,29 @@
+# Every automated test, inside Docker, on a real throwaway PostgreSQL. It never touches live data.
+#   docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests
+# Or: npm run test:docker
+name: timeflex-test
+
+services:
+  test-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: timeflex
+      POSTGRES_PASSWORD: test-only
+      POSTGRES_DB: timeflex_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timeflex -d timeflex_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    build:
+      context: .
+      dockerfile: docker/test.Dockerfile
+    environment:
+      TEST_DATABASE_URL: postgres://timeflex:test-only@test-db:5432/timeflex_test
+    depends_on:
+      test-db:
+        condition: service_healthy

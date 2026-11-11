@@ -246,3 +246,10 @@ def test_seed_gives_a_different_valid_week():
 def test_unknown_style_falls_back_to_balanced():
     result = solve_timetable(_department("no-such-style"))
     assert not result.unscheduled
+
+
+def test_learned_weights_override_the_style():
+    # A strong first-period penalty from learning keeps period 1 free even on the balanced style.
+    result = solve_timetable(_department("balanced").model_copy(update={"weights": {"first_period": 40, "late": 0, "bogus": 99}}))
+    assert not result.unscheduled
+    assert not [item for item in result.scheduled if item.slot == SLOTS[0]]

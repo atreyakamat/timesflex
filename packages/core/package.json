@@ -1,0 +1,15 @@
+{
+  "name": "@timesflex/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure scheduling, operations and intelligence logic shared by the web and native apps. No React, no DOM.",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node test/run.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5"
+  }
+}

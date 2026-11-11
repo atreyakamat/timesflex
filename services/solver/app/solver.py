@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import random
+import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ortools.sat.python import cp_model
 
@@ -200,6 +201,82 @@ def preflight(request: SolverRequest) -> list[str]:
     return issues
 
 
+def _quick_placement(
+    request: SolverRequest,
+    candidates: dict[int, list[tuple[int, int, str]]],
+    groups_of: dict[int, list[str]],
+    constraints: dict,
+    style: Style,
+    budget_seconds: float = 1.0,
+) -> dict[int, tuple[int, int, str]]:
+    """
+    Places sessions one by one, hardest first, trying a few orders. It obeys every hard rule, and
+    keeps the best attempt. The full search starts from this, so it only has to improve it; if a
+    large department leaves that search no time, this is still a complete, valid timetable.
+    """
+    rng = random.Random(request.seed if request.seed is not None else 0)
+    sessions = request.sessions
+    deadline = time.monotonic() + budget_seconds
+    best: dict[int, tuple[int, int, str]] = {}
+    best_score = -1
+    total = sum(s.duration_slots for s in sessions)
+
+    while True:
+        busy: set[tuple] = set()
+        teacher_day: dict[tuple[str, int], int] = defaultdict(int)
+        teacher_week: dict[str, int] = defaultdict(int)
+        group_day: dict[tuple[str, str, int], int] = defaultdict(int)
+        subject_day: dict[tuple[str, str, str, int], int] = defaultdict(int)
+        attempt: dict[int, tuple[int, int, str]] = {}
+        order = sorted(
+            candidates,
+            key=lambda s: (not sessions[s].locked, -sessions[s].duration_slots, len(candidates[s]), rng.random()),
+        )
+        for s in order:
+            session = sessions[s]
+            limit = constraints.get(session.teacher_id)
+            choice, choice_cost = None, None
+            for d, t, room in candidates[s]:
+                cells = range(t, t + session.duration_slots)
+                if limit and (
+                    teacher_day[(session.teacher_id, d)] + session.duration_slots > limit.max_lectures_per_day
+                    or teacher_week[session.teacher_id] + session.duration_slots > limit.max_lectures_per_week
+                ):
+                    continue
+                if any(("room", room, d, i) in busy or ("teacher", session.teacher_id, d, i) in busy for i in cells):
+                    continue
+                if any(("group", session.division_id, g, d, i) in busy for g in groups_of[s] for i in cells):
+                    continue
+                cost = style.late * t + (style.first_period if t == 0 else 0) + rng.random()
+                cost += style.teacher_day if not teacher_day[(session.teacher_id, d)] else 0
+                cost += style.teacher_peak * teacher_day[(session.teacher_id, d)]
+                for g in groups_of[s]:
+                    cost += style.repeat * subject_day[(session.division_id, g, session.subject_id, d)]
+                    cost += style.division_peak * group_day[(session.division_id, g, d)]
+                if choice_cost is None or cost < choice_cost:
+                    choice, choice_cost = (d, t, room), cost
+            if choice is None:
+                continue
+            d, t, room = choice
+            attempt[s] = choice
+            for i in range(t, t + session.duration_slots):
+                busy.add(("room", room, d, i))
+                busy.add(("teacher", session.teacher_id, d, i))
+                for g in groups_of[s]:
+                    busy.add(("group", session.division_id, g, d, i))
+            teacher_day[(session.teacher_id, d)] += session.duration_slots
+            teacher_week[session.teacher_id] += session.duration_slots
+            for g in groups_of[s]:
+                group_day[(session.division_id, g, d)] += session.duration_slots
+                subject_day[(session.division_id, g, session.subject_id, d)] += 1
+
+        score = sum(sessions[s].duration_slots for s in attempt)
+        if score > best_score:
+            best, best_score = attempt, score
+        if best_score == total or time.monotonic() >= deadline:
+            return best
+
+
 def solve_timetable(request: SolverRequest) -> SolveResult:
     result = SolveResult(diagnostics=preflight(request))
     if not request.sessions:
@@ -212,6 +289,9 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
         return result
 
     style = STYLES.get(request.style, STYLES["balanced"])
+    if request.weights:
+        known = {key: max(0, int(value)) for key, value in request.weights.items() if key in Style.__dataclass_fields__}
+        style = replace(style, **known)
     # A seed adds small, repeatable noise to every placement so the same style can give a different week.
     rng = random.Random(request.seed) if request.seed is not None else None
     breaks = _breaks_after(slots)
@@ -253,6 +333,7 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
     difficult_day_count: dict[tuple[str, str, int], list] = defaultdict(list)
     subject_day_count: dict[tuple[str, str, str, int], list] = defaultdict(list)
     soft_terms = []
+    groups_of: dict[int, list[str]] = {}
 
     for s, session in enumerate(request.sessions):
         options = room_options(session, request.rooms)
@@ -279,6 +360,7 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
         groups = (
             [session.batch] if session.batch else sorted(batches_by_division[session.division_id]) + [WHOLE_DIVISION]
         )
+        groups_of[s] = groups
         preferred = teacher_preferred.get(session.teacher_id, set())
         starts[s] = {}
         for d, t, r in candidates:
@@ -360,18 +442,31 @@ def solve_timetable(request: SolverRequest) -> SolveResult:
     ]
     model.Maximize(sum(reward) - sum(penalties))
 
+    quick = _quick_placement(request, {s: list(options) for s, options in starts.items()}, groups_of, constraints, style)
+    for s, options in starts.items():
+        model.AddHint(placed[s], 1 if s in quick else 0)
+        for key, var in options.items():
+            model.AddHint(var, 1 if quick.get(s) == key else 0)
+
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = request.time_limit_seconds
     solver.parameters.num_search_workers = 8
     status = solver.Solve(model)
 
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        result.unscheduled = list(request.sessions)
-        result.diagnostics.append("The solver could not find any placement within the time limit.")
-        return result
+    weight = lambda chosen: sum(request.sessions[s].duration_slots for s in chosen)  # noqa: E731
+    placement = quick
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        searched = {}
+        for s, options in starts.items():
+            key = next((key for key, var in options.items() if solver.BooleanValue(var)), None)
+            if key is not None:
+                searched[s] = key
+        # Better preferences never justify leaving out a class the quick pass had placed.
+        if weight(searched) >= weight(quick):
+            placement = searched
 
     for s, session in enumerate(request.sessions):
-        chosen = next((key for key, var in starts[s].items() if solver.BooleanValue(var)), None)
+        chosen = placement.get(s)
         if chosen is None:
             result.unscheduled.append(session)
             continue
